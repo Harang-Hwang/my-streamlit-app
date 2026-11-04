@@ -150,9 +150,9 @@ div.stButton > button {
 }
 
 button[kind="primary"] {
-    background: #6658cc !important;
+    background: #6756C8 !important;
     color: white !important;
-    border-color: #6658cc !important;
+    border-color: #6756C8 !important;
 }
 
 [data-testid="stBottom"] {
@@ -174,7 +174,7 @@ button[kind="primary"] {
 }
 
 .aivle-accent {
-    color: #6658cc;
+    color: #6756C8;
 }
 
 .fc .fc-button-primary {
@@ -1126,38 +1126,51 @@ def minutes_markdown(data):
     return "\n\n".join(lines)
 
 
+def meeting_history():
+    # 저장된 회의록 분석 이력
+    with db() as c:
+        return [
+            dict(row) for row in c.execute("""
+                SELECT id, created_at, source_name, result_json
+                FROM meetings
+                ORDER BY created_at DESC
+            """)
+        ]
+
+
+def load_meeting(meeting_id):
+    # 선택한 회의록 결과 불러오기
+    with db() as c:
+        row = c.execute(
+            "SELECT result_json FROM meetings WHERE id=?",
+            (meeting_id,)
+        ).fetchone()
+
+    return json.loads(row["result_json"]) if row else None
+
+
 def analyze_meeting(text, source="회의록"):
     if not text.strip():
-        raise ValueError(
-            "분석할 회의록이 없습니다."
-        )
+        raise ValueError("분석할 회의록이 없습니다.")
 
     if len(text) > 95000:
         raise ValueError(
-            "회의록이 너무 깁니다. "
-            "95,000자 이하의 자료로 나누어 분석해 주세요."
+            "95,000자 이하의 회의록으로 나누어 분석해 주세요."
         )
 
+    # AI 분석
     response = client.responses.create(
         model="gpt-4o-mini",
         instructions=(
-            f"너는 {S.user}의 업무 비서 '에이블'이다. "
-            f"현재 날짜는 {kst_today()}이고 "
-            "시간대는 Asia/Seoul이다. "
-
-            "회의 내용의 주제, 일시, 참석자, 논의, "
-            "확정/미확정 사항, 담당자별 업무와 기한, "
-            "일정과 시간, AI 추천 우선순위 및 이유를 정확히 뽑아라. "
-
-            "사용자 담당 업무를 특히 명확히 언급하라. "
-            "명시되지 않은 정보는 미기재 또는 null로 표현하고 "
-            "결코 지어내지 마라. "
-
-            "상대 날짜는 회의 날짜가 명시된 경우에만 "
-            "기준 삼아 변환하고 불명확하면 null. "
-
-            "spoken에는 3~5문장의 자연스러운 "
-            "한국어 음성 요약을 담아라."
+            f"너는 {S.user}의 업무 비서 에이블이다. "
+            f"오늘은 {kst_today()}, 시간대는 Asia/Seoul. "
+            "회의 주제, 일시, 참석자, 논의, 결정사항, "
+            "미확정 사항, 담당 업무, 일정, 기한과 "
+            "추천 우선순위 및 이유를 추출하라. "
+            "정보가 없으면 미기재 또는 null로 작성하고 "
+            "지어내지 마라. "
+            "상대 날짜는 회의 기준일이 분명할 때만 해석하라. "
+            "spoken에는 3~5문장 음성 요약을 작성하라."
         ),
         input=text,
         text={
@@ -1172,63 +1185,240 @@ def analyze_meeting(text, source="회의록"):
 
     data = json.loads(response.output_text)
 
-    for t in data["tasks"]:
-        t["due_date"] = fmt_date(
-            t.get("due_date")
-        )
+    for task in data["tasks"]:
+        task["due_date"] = fmt_date(task.get("due_date"))
 
-    for t in data["schedules"]:
-        t["date"] = fmt_date(
-            t.get("date")
-        )
+    for item in data["schedules"]:
+        item["date"] = fmt_date(item.get("date"))
 
     docid = hashlib.sha256(
         text.encode("utf-8")
     ).hexdigest()[:24]
 
-    # 회의록 저장
+    # 분석 결과 DB 저장
     with db() as c:
         c.execute("""
-            INSERT OR REPLACE INTO meetings (
-                id, created_at, source_name, result_json
-            )
+            INSERT OR REPLACE INTO meetings
+            (id, created_at, source_name, result_json)
             VALUES (?, ?, ?, ?)
         """, (
             docid,
             datetime.now(KST).isoformat(),
             source,
-            json.dumps(
-                data, ensure_ascii=False
-            )
+            json.dumps(data, ensure_ascii=False)
         ))
-
-    # 업무 및 일정 자동 등록
-    if S.auto_save:
-        items = [
-            dict(t, kind="업무")
-            for t in data["tasks"]
-        ]
-
-        items += [{
-            "title": x["title"],
-            "owner": S.user,
-            "due_date": x["date"],
-            "at_time": x["time"],
-            "description": x["description"],
-            "priority": "보통",
-            "kind": "일정"
-        } for x in data["schedules"]]
-
-        added = upsert_tasks(items, docid)
-
-    else:
-        added = 0
 
     S.meeting_text = text
     S.meeting_result = data
     S.meeting_digest = docid
 
-    return data, added
+    # 분석 직후 자동 등록하지 않고 결과 편집 후 등록
+    return data, 0
+
+
+def save_meeting_changes(meeting_id, data):
+    # 수정한 회의록 기본 정보 정리
+    for key in (
+        "topic", "date", "time", "attendees",
+        "absent", "summary", "spoken"
+    ):
+        data[key] = str(data.get(key) or "")
+
+    for key in ("discussion", "decisions", "pending"):
+        data[key] = [
+            str(item).strip()
+            for item in data.get(key, [])
+            if str(item).strip()
+        ]
+
+    # 수정한 담당 업무 정리
+    tasks = []
+
+    for row in data.get("tasks", []):
+        title = str(row.get("title") or "").strip()
+
+        if not title:
+            continue
+
+        priority = str(row.get("priority") or "보통")
+
+        tasks.append({
+            "title": title,
+            "owner": str(
+                row.get("owner") or "미지정"
+            ).strip(),
+            "due_date": fmt_date(row.get("due_date")),
+            "description": str(row.get("description") or ""),
+            "priority": (
+                priority if priority in ("높음", "보통", "낮음")
+                else "보통"
+            ),
+            "reason": str(row.get("reason") or "")
+        })
+
+    data["tasks"] = tasks
+
+    # 수정한 일정 정리
+    schedules = []
+
+    for row in data.get("schedules", []):
+        title = str(row.get("title") or "").strip()
+
+        if title:
+            schedules.append({
+                "title": title,
+                "date": fmt_date(row.get("date")),
+                "time": str(
+                    row.get("time") or ""
+                ).strip() or None,
+                "description": str(
+                    row.get("description") or ""
+                )
+            })
+
+    data["schedules"] = schedules
+
+    # 회의록 수정 결과 저장
+    with db() as c:
+        existing = c.execute(
+            "SELECT 1 FROM meetings WHERE id=?",
+            (meeting_id,)
+        ).fetchone()
+
+        if not existing:
+            raise ValueError("저장할 회의록을 찾지 못했습니다.")
+
+        c.execute("""
+            UPDATE meetings
+            SET result_json=?
+            WHERE id=?
+        """, (
+            json.dumps(data, ensure_ascii=False),
+            meeting_id
+        ))
+
+    added = 0
+
+    # 자동 등록 설정이 켜져 있으면 To-Do DB와 동기화
+    if S.auto_save:
+        items = [
+            dict(task, kind="업무")
+            for task in tasks
+        ]
+
+        items += [{
+            "title": item["title"],
+            "owner": S.user,
+            "due_date": item["date"],
+            "at_time": item["time"],
+            "description": item["description"],
+            "priority": "보통",
+            "kind": "일정",
+            "reason": ""
+        } for item in schedules]
+
+        with db() as c:
+            old = [
+                dict(row) for row in c.execute(
+                    """
+                    SELECT * FROM tasks
+                    WHERE meeting_id=?
+                    ORDER BY sort_order
+                    """,
+                    (meeting_id,)
+                )
+            ]
+
+            remaining = old.copy()
+
+            next_pos = c.execute(
+                "SELECT COALESCE(MAX(sort_order),0) FROM tasks"
+            ).fetchone()[0]
+
+            for item in items:
+                title = item["title"].strip()
+                owner = str(
+                    item.get("owner") or "미지정"
+                ).strip()
+                due = fmt_date(item.get("due_date"))
+                kind = item["kind"]
+
+                if not title:
+                    continue
+
+                # 같은 업무는 기존 완료 상태와 순서 유지
+                match = next((
+                    row for row in remaining
+                    if row["title"] == title
+                    and row["owner"] == owner
+                    and row["kind"] == kind
+                ), None)
+
+                if match:
+                    remaining.remove(match)
+
+                    c.execute("""
+                        UPDATE tasks
+                        SET due_date=?, at_time=?,
+                            description=?, priority=?, reason=?
+                        WHERE id=?
+                    """, (
+                        due,
+                        item.get("at_time"),
+                        item.get("description", ""),
+                        item.get("priority", "보통"),
+                        item.get("reason", ""),
+                        match["id"]
+                    ))
+
+                else:
+                    # 다른 회의록에 이미 있는 동일 업무 중복 방지
+                    duplicate = c.execute("""
+                        SELECT 1 FROM tasks
+                        WHERE title=? AND owner=?
+                          AND COALESCE(due_date,'')=?
+                    """, (
+                        title, owner, due or ""
+                    )).fetchone()
+
+                    if duplicate:
+                        continue
+
+                    next_pos += 1
+
+                    c.execute("""
+                        INSERT INTO tasks
+                        (id, title, owner, due_date, at_time,
+                         description, kind, priority, reason,
+                         sort_order, meeting_id)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        uuid.uuid4().hex,
+                        title,
+                        owner,
+                        due,
+                        item.get("at_time"),
+                        item.get("description", ""),
+                        kind,
+                        item.get("priority", "보통"),
+                        item.get("reason", ""),
+                        next_pos,
+                        meeting_id
+                    ))
+
+                    added += 1
+
+            # 수정 결과에서 제거된 업무는 해당 회의록의 등록 목록에서도 제거
+            for obsolete in remaining:
+                c.execute(
+                    "DELETE FROM tasks WHERE id=?",
+                    (obsolete["id"],)
+                )
+
+    S.meeting_result = data
+    S.meeting_digest = meeting_id
+
+    return added
 
 # ==============================
 # 08. 회의록 내보내기 및 이메일
@@ -1756,7 +1946,7 @@ VOICE_CSS = """
 #mic-toggle,
 #voice-send,
 #replay {
-    background: #6658cc;
+    background: #6756C8;
     color: white;
     border: 0;
     border-radius: 9px;
@@ -1767,7 +1957,7 @@ VOICE_CSS = """
 }
 
 #mic-toggle.active {
-    background: #e14b64;
+    background: #4D84BF;
 }
 
 .voice-entry {
@@ -2184,9 +2374,7 @@ def render_sidebar():
             S.loaded_user = new_user
             restore_prefs()
 
-        # 회의록 결과 상단
-        if S.summary_top:
-            render_summary_box()
+
 
         # 고정 메뉴 먼저 표시
         order = (
@@ -2207,20 +2395,44 @@ def render_sidebar():
                 f"{ICON[item]}  {item}"
             )
 
-            if st.button(
-                label,
-                key="nav_" + item,
-                type=(
-                    "primary"
-                    if S.page == item
-                    else "secondary"
-                ),
-                use_container_width=True
-            ):
-                navigate(item)
+            # 회의록 하위 메뉴
+            if item == "회의록 분석":
+                with st.expander(
+                    f"{'📌 ' if item in S.sidebar_pins else ''}▤  회의록",
+                    expanded=S.page in (
+                        "회의록 분석",
+                        "회의록 결과"
+                    )
+                ):
+                    for sub_page, sub_label in [
+                        ("회의록 분석", "분석"),
+                        ("회의록 결과", "결과")
+                    ]:
+                        if st.button(
+                            sub_label,
+                            key="nav_" + sub_page,
+                            type=(
+                                "primary"
+                                if S.page == sub_page
+                                else "secondary"
+                            ),
+                            use_container_width=True
+                        ):
+                            navigate(sub_page)
 
-        if not S.summary_top:
-            render_summary_box()
+            # 나머지 메뉴 유지
+            else:
+                if st.button(
+                    label,
+                    key="nav_" + item,
+                    type=(
+                        "primary"
+                        if S.page == item
+                        else "secondary"
+                    ),
+                    use_container_width=True
+                ):
+                    navigate(item)
 
         st.divider()
 
@@ -2275,16 +2487,7 @@ def render_sidebar():
                 persist_prefs()
                 st.rerun()
 
-            top = st.checkbox(
-                "회의록 분석 결과 상단 고정",
-                value=S.summary_top,
-                key="pin_summary"
-            )
 
-            if top != S.summary_top:
-                S.summary_top = top
-                persist_prefs()
-                st.rerun()
 
         # AI 음성 설정
         with st.expander("🔊 음성 응답 설정"):
@@ -2423,7 +2626,7 @@ def render_sidebar():
             )
 
         S.auto_save = st.toggle(
-            "회의록 분석 후 업무 자동 등록",
+            "회의록 결과 저장 시 업무·일정 등록",
             value=S.auto_save
         )
 
@@ -2435,7 +2638,7 @@ def render_sidebar():
 # ==============================
 
 def show_calendar(
-    view="timeGridWeek",
+    view="dayGridMonth",
     key="dashboard_calendar"
 ):
     events = []
@@ -2457,12 +2660,12 @@ def show_calendar(
         )
 
         color = (
-            "#b7bdc9"
+            "#B9C5D8"
             if t["done"]
             else (
-                "#d9a2c3"
+                "#4D84BF"
                 if t["priority"] == "높음"
-                else "#7770d2"
+                else "#7866CD"
             )
         )
 
@@ -2482,14 +2685,14 @@ def show_calendar(
             "initialDate": str(kst_today()),
             "timeZone": "Asia/Seoul",
             "locale": "ko",
-            "height": 510,
+            "height": 650,
             "nowIndicator": True,
 
             "headerToolbar": {
                 "left": "prev,next today",
                 "center": "title",
                 "right": (
-                    "timeGridWeek,dayGridMonth,listWeek"
+                    "dayGridMonth,timeGridWeek,listWeek"
                 )
             },
 
@@ -2501,6 +2704,7 @@ def show_calendar(
             }
         },
         callbacks=["eventClick"],
+        custom_css=CALENDAR_CSS,
         key=key
     )
 
@@ -2864,7 +3068,7 @@ def render_chat():
     )
 
     # 하단 고정 입력창
-    with st.bottom():
+    with st.bottom:
         event = VOICE_WIDGET(
             data={
                 "stage": S.voice_stage,
@@ -2905,7 +3109,7 @@ def render_chat():
             st.rerun()
 
 # ==============================
-# 14. 회의록 분석 페이지
+# 14. 회의록 분석 / 결과 페이지
 # ==============================
 
 def render_meeting():
@@ -2913,13 +3117,12 @@ def render_meeting():
     st.title("회의록 분석")
 
     st.caption(
-        "회의록의 논의·결정·담당 업무를 정리하고, "
-        "일정과 할 일을 자동으로 등록합니다."
+        "회의 내용을 입력하거나 파일을 선택해 분석합니다."
     )
 
+    # 분석 자료 선택
     available = [
-        d for d in S.uploaded_docs
-        if d["text"]
+        d for d in S.uploaded_docs if d["text"]
     ]
 
     source = st.selectbox(
@@ -2934,7 +3137,7 @@ def render_meeting():
         raw = st.text_area(
             "회의 내용",
             value=S.meeting_text,
-            height=180,
+            height=200,
             placeholder="회의 내용을 붙여넣으세요."
         )
 
@@ -2963,10 +3166,8 @@ def render_meeting():
             use_container_width=True
         ):
             try:
-                with st.spinner(
-                    "회의 내용과 담당 업무를 분석 중입니다..."
-                ):
-                    data, added = analyze_meeting(
+                with st.spinner("회의록을 분석 중입니다..."):
+                    data, _ = analyze_meeting(
                         raw,
                         source
                     )
@@ -2984,18 +3185,14 @@ def render_meeting():
                     speak(
                         data.get("spoken")
                         or data.get("summary")
-                        or "회의록 분석이 완료됐습니다."
+                        or "분석을 완료했습니다."
                     )
 
-                st.success(
-                    "회의록 분석 완료 · "
-                    f"신규 업무와 일정 {added}건 자동 등록"
-                )
+                # 분석 후 결과 페이지 이동
+                navigate("회의록 결과")
 
             except Exception as exc:
-                st.error(
-                    f"회의록 분석 실패: {exc}"
-                )
+                st.error(f"회의록 분석 실패: {exc}")
 
     with right:
         if st.button(
@@ -3004,121 +3201,287 @@ def render_meeting():
         ):
             navigate("AI 비서")
 
+    if S.meeting_result:
+        st.info(
+            "최근 분석 결과가 저장되어 있어요. "
+            "사이드바의 '회의록 → 결과'에서 편집할 수 있습니다."
+        )
+
+
+def render_meeting_result():
+    st.caption("DOCUMENTS / RESULTS")
+    st.title("회의록 분석 결과")
+
+    st.caption(
+        "분석 결과를 확인하고 수정한 뒤 저장하세요."
+    )
+
+    # 분석 이력 조회
+    history = meeting_history()
+
+    if not history:
+        st.info(
+            "저장된 분석 결과가 없습니다. "
+            "먼저 '회의록 → 분석'에서 분석해 주세요."
+        )
+
+        if st.button("회의록 분석으로 이동"):
+            navigate("회의록 분석")
+
+        return
+
+    ids = [r["id"] for r in history]
+
+    default_id = (
+        S.meeting_digest
+        if S.meeting_digest in ids
+        else ids[0]
+    )
+
+    selected_id = st.selectbox(
+        "분석 기록 선택",
+        ids,
+        index=ids.index(default_id),
+        format_func=lambda item: next(
+            (
+                f"{r['source_name']} · {r['created_at'][:16]}"
+                for r in history
+                if r["id"] == item
+            ),
+            item
+        ),
+        key="meeting_record_select"
+    )
+
+    # 선택한 분석 결과 불러오기
+    if (
+        S.meeting_digest != selected_id
+        or not S.meeting_result
+    ):
+        S.meeting_result = load_meeting(selected_id)
+        S.meeting_digest = selected_id
+
     data = S.meeting_result
 
     if not data:
-        st.info(
-            "회의 내용이나 파일을 선택한 다음 "
-            "분석을 실행해 주세요."
-        )
+        st.warning("선택한 기록을 불러오지 못했습니다.")
         return
 
-    st.divider()
+    # 분석 결과 편집
+    with st.form(f"meeting_edit_{selected_id}"):
+        topic = st.text_input(
+            "회의 주제",
+            value=data.get("topic", "")
+        )
 
-    st.subheader(
-        data.get("topic") or "회의록 분석 결과"
-    )
+        summary = st.text_area(
+            "회의 요약",
+            value=data.get("summary", ""),
+            height=130
+        )
 
-    st.write(
-        data.get("summary") or ""
-    )
+        c1, c2 = st.columns(2)
 
-    tab1, tab2, tab3 = st.tabs([
-        "핵심 논의·결정",
-        "업무와 우선순위",
-        "회의 정보·일정"
-    ])
+        meeting_date = c1.text_input(
+            "회의 일자",
+            value=data.get("date", "")
+        )
 
-    # 주요 논의 및 결정사항
-    with tab1:
+        meeting_time = c2.text_input(
+            "회의 시간",
+            value=data.get("time", "")
+        )
+
+        attendees = c1.text_input(
+            "참석자",
+            value=data.get("attendees", "")
+        )
+
+        absent = c2.text_input(
+            "불참자",
+            value=data.get("absent", "")
+        )
+
+        # 주요 논의·결정사항 편집
+        sections = {}
+
         for label, key in [
             ("주요 논의", "discussion"),
             ("결정사항", "decisions"),
             ("미확정 사항", "pending")
         ]:
-            st.markdown("#### " + label)
+            sections[key] = st.text_area(
+                label + " (한 줄에 한 항목)",
+                value="\n".join(data.get(key, [])),
+                height=100
+            )
 
-            for item in data.get(key, []):
-                st.write("• " + item)
+        # 담당 업무 편집
+        st.markdown("#### 담당 업무 편집")
 
-    # 업무 추출 결과
-    with tab2:
-        if data.get("tasks"):
-            df = pd.DataFrame(
-                data["tasks"]
-            ).rename(columns={
-                "title": "업무",
-                "owner": "담당자",
-                "due_date": "마감일",
-                "description": "설명",
-                "priority": "AI 추천 우선순위",
-                "reason": "추천 이유"
+        st.caption(
+            "업무를 추가·삭제하거나 날짜를 수정할 수 있어요. "
+            "날짜가 없으면 빈칸으로 두세요."
+        )
+
+        task_columns = [
+            "title",
+            "owner",
+            "due_date",
+            "description",
+            "priority",
+            "reason"
+        ]
+
+        task_df = pd.DataFrame(
+            data.get("tasks", []),
+            columns=task_columns
+        ).fillna("")
+
+        edited_tasks = st.data_editor(
+            task_df,
+            num_rows="dynamic",
+            hide_index=True,
+            use_container_width=True,
+            column_config={
+                "title": st.column_config.TextColumn("업무명"),
+                "owner": st.column_config.TextColumn("담당자"),
+                "due_date": st.column_config.TextColumn(
+                    "마감일 (YYYY-MM-DD)"
+                ),
+                "description": st.column_config.TextColumn("설명"),
+                "priority": st.column_config.SelectboxColumn(
+                    "우선순위",
+                    options=["높음", "보통", "낮음"]
+                ),
+                "reason": st.column_config.TextColumn("추천 이유")
+            },
+            key=f"meeting_task_editor_{selected_id}"
+        )
+
+        # 일정 편집
+        st.markdown("#### 일정 편집")
+
+        schedule_columns = [
+            "title",
+            "date",
+            "time",
+            "description"
+        ]
+
+        schedule_df = pd.DataFrame(
+            data.get("schedules", []),
+            columns=schedule_columns
+        ).fillna("")
+
+        edited_schedules = st.data_editor(
+            schedule_df,
+            num_rows="dynamic",
+            hide_index=True,
+            use_container_width=True,
+            column_config={
+                "title": st.column_config.TextColumn("일정명"),
+                "date": st.column_config.TextColumn(
+                    "날짜 (YYYY-MM-DD)"
+                ),
+                "time": st.column_config.TextColumn(
+                    "시간 (HH:MM)"
+                ),
+                "description": st.column_config.TextColumn("설명")
+            },
+            key=f"meeting_schedule_editor_{selected_id}"
+        )
+
+        spoken = st.text_area(
+            "음성 요약 문구",
+            value=data.get("spoken", "")
+        )
+
+        saved = st.form_submit_button(
+            "수정 결과 저장",
+            type="primary",
+            use_container_width=True
+        )
+
+    # 편집 결과 DB 저장
+    if saved:
+        try:
+            updated = dict(data)
+
+            updated.update({
+                "topic": topic,
+                "summary": summary,
+                "date": meeting_date,
+                "time": meeting_time,
+                "attendees": attendees,
+                "absent": absent,
+                "spoken": spoken
             })
 
-            st.dataframe(
-                df,
-                use_container_width=True,
-                hide_index=True
+            updated.update({
+                key: [
+                    line.strip()
+                    for line in value.splitlines()
+                    if line.strip()
+                ]
+                for key, value in sections.items()
+            })
+
+            updated["tasks"] = edited_tasks.where(
+                pd.notna(edited_tasks), ""
+            ).to_dict("records")
+
+            updated["schedules"] = edited_schedules.where(
+                pd.notna(edited_schedules), ""
+            ).to_dict("records")
+
+            # 날짜 형식 확인
+            for row in updated["tasks"]:
+                due = str(row.get("due_date") or "").strip()
+
+                if due and not fmt_date(due):
+                    raise ValueError(
+                        "업무 마감일은 YYYY-MM-DD 형식으로 입력해 주세요."
+                    )
+
+            for row in updated["schedules"]:
+                due = str(row.get("date") or "").strip()
+
+                if due and not fmt_date(due):
+                    raise ValueError(
+                        "일정 날짜는 YYYY-MM-DD 형식으로 입력해 주세요."
+                    )
+
+            added = save_meeting_changes(
+                selected_id,
+                updated
             )
 
-        else:
-            st.info(
-                "담당 업무가 명시되지 않았습니다."
-            )
+            if S.auto_save:
+                st.success(
+                    f"수정 결과 저장 완료 · 신규 업무 {added}건 반영"
+                )
+            else:
+                st.success(
+                    "수정 결과 저장 완료 · "
+                    "일정 자동 등록이 꺼져 있습니다."
+                )
 
-    # 일정
-    with tab3:
-        st.write(
-            "회의 일자:",
-            data.get("date") or "미기재"
-        )
+        except Exception as exc:
+            st.error(f"저장 실패: {exc}")
 
-        st.write(
-            "시간:",
-            data.get("time") or "미기재"
-        )
+    # 최신 결과 다운로드
+    st.divider()
+    st.markdown("#### 분석 결과 내려받기")
 
-        st.write(
-            "참석자:",
-            data.get("attendees") or "미기재"
-        )
-
-        st.write(
-            "불참자:",
-            data.get("absent") or "미기재"
-        )
-
-        if data.get("schedules"):
-            st.dataframe(
-                pd.DataFrame(data["schedules"]),
-                use_container_width=True,
-                hide_index=True
-            )
-
-    # TTS 음성 설명
-    if (
-        S.reply_audio
-        and S.voice_mode != "텍스트만"
-    ):
-        st.markdown("**🔊 음성 요약**")
-
-        st.audio(
-            base64.b64decode(S.reply_audio),
-            format="audio/mp3"
-        )
-
-    # 다운로드
-    st.markdown(
-        "#### 분석 결과 내려받기"
-    )
-
-    summary = minutes_markdown(data)
+    final_data = S.meeting_result
+    text_out = minutes_markdown(final_data)
 
     a, b = st.columns(2)
 
     a.download_button(
         "TXT 다운로드",
-        summary.encode("utf-8-sig"),
+        text_out.encode("utf-8-sig"),
         file_name="에이블_회의록.txt",
         mime="text/plain",
         use_container_width=True
@@ -3127,7 +3490,7 @@ def render_meeting():
     try:
         b.download_button(
             "PDF 다운로드",
-            pdf_bytes(summary),
+            pdf_bytes(text_out),
             file_name="에이블_회의록.pdf",
             mime="application/pdf",
             use_container_width=True
@@ -3137,9 +3500,7 @@ def render_meeting():
         b.error(str(exc))
 
     # 이메일 전송
-    st.markdown(
-        "#### 이메일로 전송"
-    )
+    st.markdown("#### 이메일로 전송")
 
     fmt = st.selectbox(
         "첨부 형식",
@@ -3168,7 +3529,6 @@ def render_meeting():
             )
 
             speak(answer)
-
             navigate("AI 비서")
 
         except Exception as exc:
@@ -3524,21 +3884,877 @@ def render_tasks():
 # 16. 전체 앱 라우터
 # ==============================
 
-render_sidebar()
 
-# 상단 고정된 회의록 분석 결과
-if S.summary_top:
-    st.markdown("""
-    <style>
-    .st-key-sidebar_summary_panel {
-        position: sticky;
-        top: 0;
-        z-index: 20;
-        background: white;
-        padding-bottom: 4px;
+# ===== AIVLE UI V2 START =====
+
+# 캘린더 컴포넌트 전용 스타일
+CALENDAR_CSS = """
+.fc {
+    font-family: 'Pretendard', 'Malgun Gothic', sans-serif;
+    color: #28334F;
+}
+
+.fc .fc-toolbar {
+    margin-bottom: 22px !important;
+    flex-wrap: wrap;
+    gap: 12px;
+}
+
+.fc .fc-toolbar-title {
+    color: #293451;
+    font-size: 22px !important;
+    font-weight: 800;
+    letter-spacing: -.6px;
+}
+
+.fc .fc-button-primary {
+    background: #F2EEFC !important;
+    color: #6756C8 !important;
+    border: none !important;
+    border-radius: 9px !important;
+    font-weight: 600;
+    box-shadow: none !important;
+}
+
+.fc .fc-button-primary:hover {
+    background: #E4DCFA !important;
+}
+
+.fc .fc-button-active {
+    background: #6756C8 !important;
+    color: #FFFFFF !important;
+}
+
+.fc .fc-today-button {
+    background: #E8F1FC !important;
+    color: #4177B5 !important;
+}
+
+.fc .fc-col-header-cell {
+    background: #F8F6FE;
+    border-color: #EDE9F5 !important;
+    padding: 12px 0 !important;
+}
+
+.fc .fc-col-header-cell-cushion {
+    color: #6E6B83;
+    font-size: 12px;
+    font-weight: 700;
+    text-decoration: none;
+}
+
+.fc .fc-scrollgrid,
+.fc td,
+.fc th {
+    border-color: #EEEBF4 !important;
+}
+
+.fc .fc-daygrid-day {
+    background: #FFFFFF;
+}
+
+.fc .fc-daygrid-day-number {
+    color: #3A4460;
+    padding: 10px !important;
+    font-size: 12px;
+    text-decoration: none;
+}
+
+.fc .fc-day-today {
+    background: #F0ECFC !important;
+}
+
+.fc .fc-day-today .fc-daygrid-day-number {
+    background: #6756C8;
+    color: white !important;
+    border-radius: 50%;
+    width: 31px;
+    height: 31px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    margin: 5px;
+    padding: 0 !important;
+}
+
+.fc .fc-day-other {
+    background: #FCFBFE;
+}
+
+.fc .fc-day-other .fc-daygrid-day-number {
+    color: #BDC1D2;
+}
+
+.fc .fc-daygrid-event {
+    border-radius: 6px !important;
+    padding: 3px 5px !important;
+    font-size: 11px;
+    font-weight: 600;
+    border: 0 !important;
+}
+
+.fc .fc-event-title {
+    font-weight: 600;
+}
+
+.fc .fc-list-event:hover td {
+    background: #F1EEFB !important;
+}
+"""
+
+# 전체 Streamlit 디자인
+st.markdown("""
+<style>
+
+:root {
+    --able-purple: #6756C8;
+    --able-purple-dark: #5140AA;
+    --able-blue: #4D84BF;
+    --able-ivory: #FFFDF6;
+    --able-lavender: #F2EEFC;
+    --able-border: #EAE6F2;
+    --able-text: #27334F;
+    --able-muted: #8791A8;
+}
+
+/* 전체 배경 */
+.stApp,
+[data-testid="stAppViewContainer"] {
+    background: #FFFDF6 !important;
+    color: #27334F;
+}
+
+.block-container {
+    max-width: 1450px;
+    padding-top: 2rem;
+    padding-bottom: 6rem;
+}
+
+/* 글꼴 */
+html, body, p, label, button, input, textarea {
+    font-family:
+        'Pretendard',
+        'Apple SD Gothic Neo',
+        'Malgun Gothic',
+        sans-serif !important;
+}
+
+h1, h2, h3, h4 {
+    color: #27334F !important;
+    letter-spacing: -.035em;
+}
+
+h1 {
+    font-weight: 800 !important;
+}
+
+h2, h3 {
+    font-weight: 750 !important;
+}
+
+/* 사이드바 */
+[data-testid="stSidebar"] {
+    background: linear-gradient(
+        180deg,
+        #F7F3FF 0%,
+        #FFFDF8 85%
+    ) !important;
+
+    border-right: 1px solid #E9E3F4 !important;
+}
+
+[data-testid="stSidebar"] .stButton > button {
+    background: transparent;
+    border: 1px solid transparent !important;
+    color: #4C5571;
+    font-weight: 600;
+    text-align: left;
+    border-radius: 12px;
+    min-height: 43px;
+    transition: all .18s ease;
+}
+
+[data-testid="stSidebar"] .stButton > button:hover {
+    background: #EDE8FA !important;
+    color: #5847BA !important;
+}
+
+[data-testid="stSidebar"] button[kind="primary"] {
+    background: #E6DFFA !important;
+    border: 1px solid #DBD3F7 !important;
+    color: #5944B6 !important;
+    box-shadow: none !important;
+}
+
+/* 통계 카드 */
+[data-testid="stMetric"] {
+    background: #FFFFFF !important;
+    border: 1px solid #EBE6F3 !important;
+    border-radius: 17px !important;
+    padding: 21px 22px !important;
+    box-shadow: 0 5px 18px rgba(56,44,105,.035);
+}
+
+[data-testid="stMetricLabel"] {
+    color: #8A91A7 !important;
+    font-size: 13px;
+}
+
+[data-testid="stMetricValue"] {
+    color: #5748B5 !important;
+    font-weight: 800;
+    letter-spacing: -.04em;
+}
+
+/* 일반 카드 */
+[data-testid="stVerticalBlockBorderWrapper"] {
+    border-radius: 18px !important;
+}
+
+[data-testid="stVerticalBlockBorderWrapper"]
+> div {
+    border-color: #ECE7F4 !important;
+}
+
+/* 일반 버튼 */
+div.stButton > button {
+    border-radius: 11px !important;
+    min-height: 40px;
+    border: 1px solid #E4DFF0;
+    color: #514F6A;
+    background: #FFFFFF;
+    font-weight: 650;
+    transition: all .18s ease;
+}
+
+div.stButton > button:hover {
+    background: #F1EDFB;
+    border-color: #C8BDF0;
+    color: #5944B6;
+}
+
+button[kind="primary"],
+div.stButton > button[kind="primary"],
+div.stFormSubmitButton > button[kind="primary"] {
+    background: #6756C8 !important;
+    border-color: #6756C8 !important;
+    color: #FFFFFF !important;
+    box-shadow: 0 5px 13px rgba(103,86,200,.14);
+}
+
+button[kind="primary"]:hover {
+    background: #5140AA !important;
+    border-color: #5140AA !important;
+}
+
+/* 입력 영역 */
+[data-testid="stTextInput"] input,
+[data-testid="stTextArea"] textarea {
+    background: #FFFFFF !important;
+    border-color: #E7E2F1 !important;
+    border-radius: 11px !important;
+    color: #263450 !important;
+}
+
+[data-testid="stTextInput"] input:focus,
+[data-testid="stTextArea"] textarea:focus {
+    border-color: #9484E1 !important;
+    box-shadow: 0 0 0 2px #EDE8FC !important;
+}
+
+/* 탭 */
+button[data-baseweb="tab"] {
+    color: #8586A0 !important;
+    font-weight: 650;
+}
+
+button[data-baseweb="tab"][aria-selected="true"] {
+    color: #6756C8 !important;
+}
+
+/* 체크박스 */
+[data-testid="stCheckbox"] {
+    color: #4F5874;
+}
+
+/* 채팅 */
+[data-testid="stChatMessage"] {
+    border: 1px solid #EDE8F5 !important;
+    background: #FFFFFF !important;
+    border-radius: 17px !important;
+    padding: 16px !important;
+}
+
+[data-testid="stChatInput"] {
+    background: #FFFFFF !important;
+    border-radius: 14px !important;
+}
+
+/* 하단 입력창 */
+[data-testid="stBottom"] {
+    background: transparent !important;
+}
+
+/* 구분선 */
+hr {
+    border-color: #EEEAF5 !important;
+}
+
+/* 메인 히어로 카드 */
+.able-hero {
+    background: linear-gradient(
+        115deg,
+        #F2ECFF 0%,
+        #F5F2FF 48%,
+        #EAF3FE 100%
+    );
+    border: 1px solid #E6E1F6;
+    border-radius: 23px;
+    padding: 29px 32px;
+    margin-bottom: 23px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 16px;
+    box-shadow: 0 8px 24px rgba(94,77,155,.04);
+}
+
+.able-hero-kicker {
+    font-size: 11px;
+    color: #7767BB;
+    font-weight: 800;
+    letter-spacing: .12em;
+    margin-bottom: 10px;
+}
+
+.able-hero h2 {
+    font-size: clamp(21px, 2.5vw, 30px);
+    font-weight: 800;
+    margin: 0 0 10px 0;
+    color: #302C5D !important;
+}
+
+.able-hero p {
+    font-size: 13px;
+    margin: 0;
+    color: #747A98;
+    line-height: 1.7;
+}
+
+.able-hero-date {
+    display: inline-flex;
+    align-items: center;
+    background: rgba(255,255,255,.78);
+    border: 1px solid #E3DCF6;
+    padding: 12px 17px;
+    border-radius: 13px;
+    color: #6255AD;
+    font-size: 12px;
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+/* 섹션 레이블 */
+.able-section-kicker {
+    font-size: 11px;
+    font-weight: 800;
+    color: #9389B7;
+    letter-spacing: .11em;
+    margin-bottom: 6px;
+    text-transform: uppercase;
+}
+
+.able-section-title {
+    font-size: 19px;
+    font-weight: 800;
+    color: #27334F;
+    margin-bottom: 15px;
+}
+
+/* AI 비서 카드 */
+.able-assistant-banner {
+    padding: 19px;
+    background: linear-gradient(
+        130deg,
+        #F0EBFF 0%,
+        #ECF4FF 100%
+    );
+    border-radius: 15px;
+    margin-bottom: 16px;
+}
+
+.able-assistant-banner .icon {
+    font-size: 23px;
+    color: #6756C8;
+    margin-bottom: 8px;
+}
+
+.able-assistant-banner strong {
+    display: block;
+    font-size: 17px;
+    color: #453D83;
+    margin-bottom: 8px;
+}
+
+.able-assistant-banner span {
+    font-size: 12px;
+    color: #747A9A;
+    line-height: 1.7;
+}
+
+/* 진행률 바 */
+[data-testid="stProgress"] > div > div {
+    background-color: #6756C8 !important;
+}
+
+/* 모바일 */
+@media (max-width: 750px) {
+    .able-hero {
+        padding: 22px 20px;
+        flex-direction: column;
+        align-items: flex-start;
     }
-    </style>
-    """, unsafe_allow_html=True)
+
+    .able-hero-date {
+        padding: 9px 12px;
+    }
+
+    .block-container {
+        padding-left: 14px;
+        padding-right: 14px;
+    }
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+
+# =========================================================
+# 새로운 메인 대시보드 (기존 기능 유지)
+# =========================================================
+
+def render_dashboard():
+
+    rows = tasks_all()
+
+    undone = [
+        x for x in rows
+        if not x["done"]
+    ]
+
+    due = [
+        x for x in undone
+        if x["due_date"]
+        and x["due_date"] <= str(kst_today())
+    ]
+
+    completed = len(rows) - len(undone)
+
+    # 상단 히어로 영역
+    safe_user = html.escape(S.user)
+
+    today_str = kst_today().strftime(
+        "%Y년 %m월 %d일"
+    )
+
+    st.html(f"""
+    <div class="able-hero">
+        <div>
+            <div class="able-hero-kicker">
+                ✦ ABLE WORKSPACE
+            </div>
+
+            <h2>
+                {safe_user}님, 오늘도 좋은 흐름으로.
+            </h2>
+
+            <p>
+                이번 달의 일정과 중요한 업무를
+                한눈에 확인해 보세요.
+            </p>
+        </div>
+
+        
+    </div>
+    """)
+
+    # 업무 통계
+    c1, c2, c3 = st.columns(3)
+
+    c1.metric(
+        "전체 업무",
+        f"{len(rows):02d}"
+    )
+
+    c2.metric(
+        "진행 중",
+        f"{len(undone):02d}"
+    )
+
+    c3.metric(
+        "완료한 업무",
+        f"{completed:02d}"
+    )
+
+    st.write("")
+
+    # 메인 콘텐츠
+    left, right = st.columns(
+        [1.9, 1],
+        gap="large"
+    )
+
+    # 왼쪽 : 월간 캘린더
+    with left:
+
+        st.html("""
+        <div class="able-section-kicker">
+            MY SCHEDULE
+        </div>
+
+        <div class="able-section-title">
+            월간 캘린더
+        </div>
+        """)
+
+        # 월간 보기 우선
+        show_calendar(
+            view="dayGridMonth",
+            key="week_calendar_home"
+        )
+
+        st.caption(
+            "일정을 클릭하면 하단에서 상세 내용을 "
+            "확인할 수 있어요."
+        )
+
+        if st.button(
+            "전체 일정 관리하기",
+            key="ui_v2_all_tasks",
+            use_container_width=True
+        ):
+            navigate("일정·할 일")
+
+    # 오른쪽 : AI 비서 + 할 일
+    with right:
+
+        st.html("""
+        <div class="able-section-kicker">
+            YOUR AI ASSISTANT
+        </div>
+
+        <div class="able-section-title">
+            AI 비서 에이블
+        </div>
+        """)
+
+        with st.container(border=True):
+
+            st.html("""
+            <div class="able-assistant-banner">
+                <div class="icon">✦</div>
+
+                <strong>
+                    무엇을 도와드릴까요?
+                </strong>
+
+                <span>
+                    오늘의 업무 우선순위부터
+                    회의록 정리까지,
+                    에이블에게 편하게 물어보세요.
+                </span>
+            </div>
+            """)
+
+            with st.form(
+                "dashboard_quickask_ui_v2"
+            ):
+                question = st.text_input(
+                    "빠른 질문",
+                    placeholder=(
+                        "예: 오늘 가장 중요한 업무가 뭐야?"
+                    ),
+                    label_visibility="collapsed"
+                )
+
+                ask = st.form_submit_button(
+                    "✦ 에이블에게 물어보기",
+                    type="primary",
+                    use_container_width=True
+                )
+
+                if ask and question.strip():
+                    S.page = "AI 비서"
+                    S.quick_question = question
+                    st.rerun()
+
+            if st.button(
+                "AI 비서 전체 화면으로",
+                use_container_width=True,
+                key="ui_v2_open_chat"
+            ):
+                navigate("AI 비서")
+
+        st.write("")
+
+        # 오늘 할 일
+        st.html("""
+        <div class="able-section-kicker">
+            DAILY CHECKLIST
+        </div>
+
+        <div class="able-section-title">
+            오늘 할 일
+        </div>
+        """)
+
+        with st.container(border=True):
+
+            if not due:
+                st.success(
+                    "오늘까지 처리할 미완료 업무가 없어요."
+                )
+
+            else:
+                for task in due[:7]:
+
+                    checked = st.checkbox(
+                        task["title"],
+                        value=bool(task["done"]),
+                        key="today_" + task["id"]
+                    )
+
+                    if checked != bool(task["done"]):
+                        update_task(
+                            task["id"],
+                            done=int(checked)
+                        )
+                        st.rerun()
+
+                    st.caption(
+                        f"{task['priority']} 우선순위"
+                        f"  ·  {task['due_date']}"
+                    )
+
+            st.divider()
+
+            st.caption("전체 업무 진행률")
+
+            rate = (
+                completed / len(rows)
+                if rows
+                else 0
+            )
+
+            st.progress(rate)
+
+            st.caption(
+                f"{completed} / {len(rows)}건 완료"
+            )
+
+            if st.button(
+                "할 일 전체 보기",
+                use_container_width=True,
+                key="ui_v2_todo"
+            ):
+                navigate("일정·할 일")
+
+        st.write("")
+
+        # 회의록 빠른 접근
+        with st.container(border=True):
+
+            st.markdown("**▤ 회의록 분석**")
+
+            st.caption(
+                "파일을 올리고 AI가 주요 논의와 "
+                "담당 업무를 정리하도록 해보세요."
+            )
+
+            if st.button(
+                "회의록 분석하기",
+                use_container_width=True,
+                key="ui_v2_meeting"
+            ):
+                navigate("회의록 분석")
+
+
+# ===== AIVLE UI V2 END =====
+
+
+
+# === UI FIX V3 START ===
+
+st.markdown("""
+<style>
+
+/* ============================================
+   사이드바 메뉴 버튼 전체 스타일
+============================================ */
+
+[data-testid="stSidebar"] [data-testid="stButton"] button {
+    width: 100% !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: flex-start !important;
+
+    text-align: left !important;
+
+    padding: 11px 15px !important;
+
+    background: #FFFDFC !important;
+    border: 1px solid #E8E1F3 !important;
+
+    border-radius: 12px !important;
+
+    color: #4C5074 !important;
+    font-weight: 600 !important;
+
+    box-shadow: 0 2px 6px rgba(75, 65, 130, 0.025);
+
+    transition: all 0.2s ease !important;
+}
+
+/* 버튼 내부 글자 왼쪽 정렬 */
+
+[data-testid="stSidebar"] [data-testid="stButton"] button p {
+    text-align: left !important;
+    width: 100%;
+    margin: 0 !important;
+}
+
+[data-testid="stSidebar"] [data-testid="stButton"] button div {
+    text-align: left !important;
+}
+
+/* 마우스를 올렸을 때 */
+
+[data-testid="stSidebar"] [data-testid="stButton"] button:hover {
+    background: #EEE9FC !important;
+    border-color: #D8CEF4 !important;
+    color: #5D4BB9 !important;
+
+    transform: translateX(2px);
+}
+
+/* 선택된 메뉴 버튼 */
+
+[data-testid="stSidebar"] [data-testid="stButton"] button[kind="primary"],
+[data-testid="stSidebar"] [data-testid="stButton"] button[data-testid="stBaseButton-primary"] {
+    background: #6756C8 !important;
+    border-color: #6756C8 !important;
+    color: #FFFFFF !important;
+
+    box-shadow: 0 4px 12px rgba(103, 86, 200, 0.16);
+}
+
+/* 선택 메뉴 글자 */
+
+[data-testid="stSidebar"] [data-testid="stButton"] button[kind="primary"] p,
+[data-testid="stSidebar"] [data-testid="stButton"] button[data-testid="stBaseButton-primary"] p {
+    color: #FFFFFF !important;
+}
+
+/* ============================================
+   모든 Primary 버튼 - 보라색 통일
+============================================ */
+
+button[kind="primary"],
+button[data-testid="stBaseButton-primary"],
+button[data-testid="stBaseButton-primaryFormSubmit"] {
+    background: #6756C8 !important;
+    border: 1px solid #6756C8 !important;
+    color: #FFFFFF !important;
+
+    border-radius: 11px !important;
+    font-weight: 700 !important;
+}
+
+button[kind="primary"]:hover,
+button[data-testid="stBaseButton-primary"]:hover,
+button[data-testid="stBaseButton-primaryFormSubmit"]:hover {
+    background: #5544B4 !important;
+    border-color: #5544B4 !important;
+    color: #FFFFFF !important;
+}
+
+/* ============================================
+   폼 전송 버튼 색상 수정
+   '에이블에게 물어보기' 빨간색 해결
+============================================ */
+
+[data-testid="stFormSubmitButton"] button {
+    background-color: #6756C8 !important;
+    border-color: #6756C8 !important;
+    color: #FFFFFF !important;
+
+    border-radius: 11px !important;
+    font-weight: 700 !important;
+
+    box-shadow: 0 4px 12px rgba(103, 86, 200, 0.12);
+}
+
+[data-testid="stFormSubmitButton"] button:hover {
+    background-color: #5544B4 !important;
+    border-color: #5544B4 !important;
+    color: #FFFFFF !important;
+}
+
+[data-testid="stFormSubmitButton"] button p {
+    color: #FFFFFF !important;
+}
+
+/* ============================================
+   비활성화 버튼
+============================================ */
+
+button:disabled {
+    opacity: 0.5 !important;
+    box-shadow: none !important;
+    cursor: not-allowed !important;
+}
+
+/* ============================================
+   전체 포커스 색상
+============================================ */
+
+button:focus-visible {
+    outline: 2px solid #A99BEF !important;
+    outline-offset: 2px !important;
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+# === UI FIX V3 END ===
+
+
+# ===== AIVLE UI V4 START =====
+st.html("""
+<style>
+[data-testid="stSidebar"] [data-testid="stButton"] button {
+    justify-content: flex-start !important;
+    text-align: left !important;
+}
+
+[data-testid="stSidebar"] [data-testid="stButton"]
+button [data-testid="stMarkdownContainer"] {
+    width: 100% !important;
+    display: flex !important;
+    justify-content: flex-start !important;
+    text-align: left !important;
+}
+
+[data-testid="stSidebar"] [data-testid="stButton"]
+button p {
+    width: 100% !important;
+    text-align: left !important;
+}
+</style>
+""")
+# ===== AIVLE UI V4 END =====
+
+render_sidebar()
 
 # 현재 페이지 표시
 if S.page == "대시보드":
@@ -3549,6 +4765,9 @@ elif S.page == "AI 비서":
 
 elif S.page == "회의록 분석":
     render_meeting()
+
+elif S.page == "회의록 결과":
+    render_meeting_result()
 
 else:
     render_tasks()
