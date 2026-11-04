@@ -892,13 +892,20 @@ def talk_ai(prompt, selected_docs=None):
    경우에만 완료되었다고 말해.
 """
 
-    history = [
-        {
-            "role": x["role"],
-            "content": x["content"]
-        }
-        for x in S.messages[-12:]
-    ]
+    
+    # 문서 분석 시 이전 대화 내용 제외
+    if selected_docs:
+        history = []
+
+    else:
+        history = [
+            {
+                "role": x["role"],
+                "content": x["content"]
+            }
+            for x in S.messages[-12:]
+        ]
+
 
     response = client.responses.create(
         model="gpt-4o-mini",
@@ -2197,27 +2204,30 @@ export default function(component) {
   let playback = null;
 
   
+
+
 function stopPlayback() {
   if (playback) {
     playback.onended = null;
     playback.pause();
     playback.currentTime = 0;
-    playback = null;
   }
 
   stopVoice.hidden = true;
-  replay.hidden = false;
+  replay.hidden = !playback;
 
   busy = false;
 
-  status.textContent = '음성 답변이 중지되었습니다.';
+  status.textContent =
+    '음성 답변이 중지되었습니다.';
 
-  // 음성 인식이 켜져 있다면 다시 대기
   if (alive && window.__ableMicEnabled) {
     clearTimeout(timeout);
     timeout = setTimeout(listen, 450);
   }
 }
+
+
 
 stopVoice.onclick = () => {
   stopPlayback();
@@ -2480,22 +2490,41 @@ stopVoice.onclick = () => {
       listen();
       };
 
-      replay.onclick = () => {
-      if (!playback) return;
       
-      replay.hidden = true;
-      stopVoice.hidden = false;
-      
-      busy = true;
-      
-      playback.currentTime = 0;
-      
-      playback.play().catch(() => {
-      busy = false;
-      stopVoice.hidden = true;
-      replay.hidden = false;
-      });
-      };
+
+replay.onclick = () => {
+  if (!playback) return;
+
+  replay.hidden = true;
+  stopVoice.hidden = false;
+
+  busy = true;
+  playback.currentTime = 0;
+
+  playback.onended = () => {
+    busy = false;
+    stopVoice.hidden = true;
+    replay.hidden = false;
+
+    status.textContent =
+      '호출어를 기다리는 중...';
+
+    if (alive && window.__ableMicEnabled) {
+      listen();
+    }
+  };
+
+  playback.play().catch(() => {
+    busy = false;
+    stopVoice.hidden = true;
+    replay.hidden = false;
+
+    status.textContent =
+      '음성 재생에 실패했습니다.';
+  });
+};
+
+
 
       timeout = setTimeout(() => {
         if (
@@ -5064,6 +5093,24 @@ def render_dashboard():
                 key="ui_v2_meeting"
             ):
                 navigate("회의록 분석")
+
+
+        # 문서 검색 빠른 접근
+        with st.container(border=True):
+
+            st.markdown("**📚 AI 문서 검색**")
+
+            st.caption(
+                "업로드한 자료를 검색하고 "
+                "AI로 핵심 내용을 분석해 보세요."
+            )
+
+            if st.button(
+                "문서 검색하기",
+                use_container_width=True,
+                key="ui_v2_doc_search"
+            ):
+                navigate("문서 검색")
 
 
 # ===== AIVLE UI V2 END =====
