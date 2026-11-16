@@ -1,111 +1,90 @@
-
 import streamlit as st
-from langchain_openai import ChatOpenAI, OpenAIEmbeddings
-from langchain_chroma import Chroma
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.messages import HumanMessage, AIMessage
 
-# 페이지 설정 (가장 먼저 실행)
-st.set_page_config(page_title="FAQ 챗봇", page_icon="💬")
-st.title("💬 EduVerse Academy FAQ 챗봇")
+st.set_page_config(page_title="AIVLE Guide | 에이블스쿨 학습 도우미", page_icon="🎓", layout="wide", initial_sidebar_state="expanded")
 
-# 문서 포맷팅 함수
-def format_docs(docs):
-    return "\n\n".join(doc.page_content for doc in docs)
+st.markdown("""<style>
+.stApp {background:#F8FBFA;}
+[data-testid="stSidebar"] {background:#EAF5F1;}
+h1,h2,h3 {color:#174F48;}
+.hero {background:linear-gradient(120deg,#E1F3ED,#F6FBF9);border:1px solid #CEE4DA;border-radius:20px;padding:26px 28px;margin:4px 0 24px;}
+.eyebrow {font-size:12px;font-weight:700;letter-spacing:2px;color:#277E6C;}
+.hero h1 {font-size:32px;margin:12px 0 10px;}
+.hero p {color:#526E65;margin:0;font-size:15px;}
+.note {background:white;border:1px solid #DBE8E2;border-radius:12px;padding:12px 16px;color:#517067;font-size:13px;}
+div.stButton > button {border-radius:12px;border:1px solid #BBD9CE;background:#FFFFFF;color:#205A4F;min-height:47px;width:100%;white-space:normal;}
+div.stButton > button:hover {background:#E1F3EB;border-color:#77B69C;color:#174F48;}
+</style>""", unsafe_allow_html=True)
 
-# 벡터 저장소 캐싱
-@st.cache_resource
-def get_vectorstore():
-    embedding = OpenAIEmbeddings(model="text-embedding-3-small")
-    return Chroma(
-        collection_name="eduverse_faq",
-        embedding_function=embedding,
-        persist_directory="chroma_db"
-    )
+S = st.session_state
+if "messages" not in S: S.messages = []
+if "pending_question" not in S: S.pending_question = None
+if "doc_id" not in S: S.doc_id = None
 
-# 필터 선택지: 저장된 메타데이터에서 값 목록 추출
-@st.cache_resource
-def get_options():
-    metas = get_vectorstore().get(include=["metadatas"])["metadatas"]
-    keys = ["category", "user_type", "plan", "channel"]
-    return {k: sorted({m[k] for m in metas if m.get(k)}) for k in keys}
+RECOMMENDATIONS = [
+    "비전공자도 에이블스쿨에 지원할 수 있나요?",
+    "AI 개발자와 DX 컨설턴트는 무엇이 다른가요?",
+    "7·8·9기 DX 미니프로젝트는 각각 몇 차까지 진행했나요?",
+    "에이블스쿨의 취업 지원은 어떤 것이 있나요?",
+]
 
-# 체인 캐싱 (검색은 체인 밖에서 수행하고 context로 전달)
-@st.cache_resource
-def get_chain():
-    s_msg = """
-    1. 반드시 제공된 문서 내용(context)에 근거하여 답변하세요.
-    2. 문서에 없는 내용은 추측하지 말고 "업로드된 문서에서 확인되지 않습니다."라고 답하세요.
-    3. 답변은 간결하고 명확하게 작성하세요.
-    [문서]
-    {context}"""
-    prompt = ChatPromptTemplate.from_messages([("system", s_msg), ("human", "{input}")])
-    llm = ChatOpenAI(model="gpt-4o-mini", streaming=True, temperature=0)
-    return prompt | llm | StrOutputParser()
-
-vectorstore = get_vectorstore()
-options = get_options()
-chain = get_chain()
-
-# 사이드바: 메타데이터 필터
 with st.sidebar:
-    st.header("🔎 검색 필터")
-    categories = st.multiselect("카테고리", options["category"],
-                                placeholder="전체")
-    user_type = st.selectbox("사용자 유형", ["전체"] + options["user_type"])
-    plan = st.selectbox("요금제", ["전체"] + [p for p in options["plan"] if p != "All"])
-    channel = st.selectbox("접속 채널", ["전체"] + [c for c in options["channel"] if c != "All"])
-    k = st.slider("검색 문서 수(k)", 1, 10, 4)
+    st.markdown("## 🎓 AIVLE Guide")
+    st.caption("나의 에이블스쿨 AI 길잡이")
+    st.divider()
+    st.subheader("📄 백서 관리")
+    uploaded_file = st.file_uploader("AIVLE School 백서 PDF를 선택하세요", type=["pdf"], key="pdf_upload")
+    if uploaded_file is not None:
+        import hashlib
+        current_id = hashlib.sha256(uploaded_file.getvalue()).hexdigest()
+        if S.doc_id != current_id:
+            S.doc_id = current_id
+            S.messages = []
+        st.success("PDF 업로드 완료")
+        st.caption(f"📎 {uploaded_file.name}")
+        st.info("현재는 UI 프로토타입으로, PDF 내용 검색은 내일 RAG 연결 후 활성화됩니다.")
+    else:
+        if S.doc_id is not None:
+            S.doc_id = None
+            S.messages = []
+        st.info("PDF 업로드 기능 테스트 가능")
+    st.divider()
+    st.subheader("📚 주요 안내 주제")
+    st.markdown("지원·선발  ·  교육·혜택  ·  미니/빅프로젝트  ·  취업·진로")
+    st.divider()
+    if st.button("🗑️ 대화 초기화", key="clear_chat"):
+        S.messages = []
+        S.pending_question = None
+        st.rerun()
+    st.caption("KT AIVLE School | 4차 미니프로젝트 UI 시안")
 
-# 선택값 → Chroma 필터 변환
-def build_filter():
-    conditions = []
-    if categories:
-        conditions.append({"category": {"$in": categories}})
-    if user_type != "전체":
-        conditions.append({"user_type": user_type})
-    if plan != "전체":                      # 'All' 행은 모든 요금제에 해당하므로 함께 포함
-        conditions.append({"plan": {"$in": [plan, "All"]}})
-    if channel != "전체":
-        conditions.append({"channel": {"$in": [channel, "All"]}})
+st.markdown("""<div class="hero"><div class="eyebrow">AIVLE SCHOOL · YOUR LEARNING COMPANION</div><h1>무엇이 궁금한가요? 👋</h1><p>지원 자격부터 프로젝트와 진로까지, 에이블스쿨의 정보를 한눈에 살펴보세요.</p></div>""", unsafe_allow_html=True)
+st.markdown("#### ✨ 이런 질문은 어떠세요?")
+cols = st.columns(2, gap="medium")
+for idx, question in enumerate(RECOMMENDATIONS):
+    with cols[idx % 2]:
+        if st.button(question, key=f"recommend_{idx}"):
+            S.pending_question = question
 
-    if not conditions:
-        return None
-    if len(conditions) == 1:                # Chroma의 $and는 조건이 2개 이상이어야 함
-        return conditions[0]
-    return {"$and": conditions}
+st.divider()
+if not S.messages:
+    st.markdown('<div class="note">💡 추천 질문을 누르거나 아래 채팅창에 직접 질문해 보세요. 현재 답변은 테스트용 안내 문구입니다.</div>', unsafe_allow_html=True)
 
-# 세션 상태 초기화
-if "messages" not in st.session_state:
-    st.session_state.messages = []
+for message in S.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
 
-# 기존 대화 내용 출력
-for message in st.session_state.messages:
-    role = "user" if isinstance(message, HumanMessage) else "assistant"
-    with st.chat_message(role):
-        st.markdown(message.content)
-
-# 사용자 입력 처리
-user_input = st.chat_input("메시지를 입력하세요.")
-if user_input:
-    st.chat_message("user").markdown(user_input)
-
-    # 필터 적용 검색
-    docs = vectorstore.similarity_search(user_input, k=k, filter=build_filter())
-
+user_input = st.chat_input("에이블스쿨에 대해 질문해 주세요...")
+question = S.pending_question or user_input
+if question:
+    S.pending_question = None
+    with st.chat_message("user"):
+        st.markdown(question)
+    S.messages.append({"role":"user", "content":question})
+    # TODO: 내일 실제 체인 연결 후 아래 answer만 교체
+    answer = ("**AIVLE Guide UI 테스트 답변입니다.**\n\n"
+              "현재는 화면과 버튼 동작을 확인하는 프로토타입입니다. "
+              "내일 PDF 업로드 → 벡터화 → RAG 검색을 연결하면 업로드한 백서를 근거로 답변할 수 있습니다.\n\n"
+              "*현재 답변은 백서 검색 결과가 아닙니다.*")
     with st.chat_message("assistant"):
-        response_stream = chain.stream({"context": format_docs(docs), "input": user_input})
-        full_response = st.write_stream(response_stream)
-
-        # 참고한 FAQ 표시
-        with st.expander(f"참고한 FAQ ({len(docs)}건)"):
-            for doc in docs:
-                m = doc.metadata
-                st.markdown(f"**[{m.get('category')} · {m.get('user_type')} · "
-                            f"{m.get('plan')} · {m.get('channel')}]**")
-                st.text(doc.page_content)
-
-    # 대화 기록 저장
-    st.session_state.messages.append(HumanMessage(content=user_input))
-    st.session_state.messages.append(AIMessage(content=full_response))
+        st.markdown(answer.replace("\n", "\n"))
+    S.messages.append({"role":"assistant", "content":answer.replace("\n", "\n")})
