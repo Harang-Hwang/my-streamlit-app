@@ -1,8 +1,10 @@
+# [셀 03] UI 디자인/CSS/메뉴/세션/질문 데이터 | Ctrl+F로 [수정 포인트 ...] 검색
 """AIVLE Guide: Streamlit multi-page UI + optional PDF RAG.
 UI prototype works without OpenAI API key. Full Q&A requires configured key and PDF.
 """
 import csv
 import hashlib
+import re
 import io
 import os
 import sqlite3
@@ -59,7 +61,7 @@ for key, default in {
     "pdf_bytes": None, "source_choice": "첨부 PDF", "feedback": {},
     "weekly_hours": 8, "level": "기초", "goal": "Python·데이터 분석 기초 익히기",
     "days": {"월":1.0,"화":1.0,"수":1.0,"목":1.0,"금":1.0,"토":2.0,"일":1.0},
-    "study_checks": {}, "study_logs": [],
+    "study_checks": {}, "study_logs": [], "audio_responses": {},
 }.items():
     if key not in S:
         S[key] = default
@@ -72,6 +74,9 @@ QUESTIONS = [
     "미니프로젝트와 빅프로젝트는 어떻게 다른가요?",
     "7·8·9기 DX 미니프로젝트는 몇 차까지 진행됐나요?",
     "취업 지원 프로그램에는 무엇이 있나요?",
+    "출석인정요청은 언제까지 가능한가요?",
+    "국민내일배움카드가 없어도 지원할 수 있나요?",
+    "훈련장려금 11만 6천 원과 30만 원은 왜 다른가요?",
 ]
 FOLLOW_UP = ["공식 안내와 선배 후기는 어떻게 구분하나요?", "프로젝트를 준비하는 팁을 알려주세요.", "학습 계획은 어떻게 세우나요?"]
 DB = Path(tempfile.gettempdir()) / "aivle_guide_qcounts_v2.sqlite3"
@@ -117,36 +122,29 @@ def get_api_key():
         return ""
 
 
-@st.cache_resource(show_spinner="PDF에서 참고 내용을 추출하고 벡터화하는 중...")
-def build_retriever(file_bytes, file_hash, api_key):
-    """해시가 같으면 재임베딩하지 않음. 파일별 컬렉션 분리."""
-    from langchain_community.document_loaders import PyMuPDFLoader
-    from langchain_text_splitters import RecursiveCharacterTextSplitter
-    from langchain_openai import OpenAIEmbeddings
-    from langchain_chroma import Chroma
+# [셀 04] PDF 저장/벡터화 캐시/RAG 호출/질문 저장 | Ctrl+F로 [수정 포인트 ...] 검색
+# [UI/핵심 연결] RAG는 rag_core.py, 음성은 voice_core.py에 각각 모듈화했습니다.
+from rag_core import rag_pipeline
+from voice_core import transcribe_audio, synthesize_answer
 
-    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
-        tmp.write(file_bytes)
-        pdf_path = tmp.name
+
+@st.cache_resource(show_spinner="백서를 분석하고 검색 인덱스를 생성하는 중...", max_entries=4)
+def build_retriever(file_bytes, file_hash, api_key, document_name):
+    """[교안 46쪽 필수] PDF bytes를 임시 .pdf 경로로 저장 → rag_pipeline(path)에 전달.
+
+    Streamlit은 클릭마다 앱을 다시 실행하지만, 같은 파일 해시에는 캐시된
+    RAG 객체를 재사용합니다. 문서를 바꾸면 새 해시로 재임베딩됩니다.
+    """
+    with tempfile.NamedTemporaryFile(mode="wb", suffix=".pdf", delete=False) as temp:
+        temp.write(file_bytes)
+        pdf_path = temp.name
     try:
-        docs = PyMuPDFLoader(pdf_path).load()
+        rag = rag_pipeline(pdf_path, api_key)
     finally:
-        os.unlink(pdf_path)
-    if not docs:
-        raise ValueError("PDF에서 텍스트를 읽지 못했습니다.")
-    chunks = RecursiveCharacterTextSplitter(
-        chunk_size=1000, chunk_overlap=200,
-        separators=["\n\n", "\n", ". ", " ", ""]
-    ).split_documents(docs)
-    if not chunks:
-        raise ValueError("문서에서 검색 가능한 내용이 없습니다.")
-    embeddings = OpenAIEmbeddings(model="text-embedding-3-small", api_key=api_key)
-    vectordb = Chroma.from_documents(
-        documents=chunks, embedding=embeddings,
-        collection_name=f"aivle_{file_hash[:22]}"
-    )
-    return vectordb.as_retriever(search_kwargs={"k":6}), len(docs), len(chunks)
-
+        if os.path.exists(pdf_path):
+            os.unlink(pdf_path)
+    rag.document_name = document_name
+    return rag
 
 def active_document():
     if S.source_choice == "기본 백서" and DEFAULT_PDF.exists():
@@ -156,41 +154,47 @@ def active_document():
     return None, None
 
 
+
 def answer_question(question):
+    """
+    활성화된 PDF 백서를 검색하여
+    RAG 답변과 출처 정보를 반환합니다.
+    """
+
+    # 1. 현재 선택한 PDF 확인
     document_name, pdf_bytes = active_document()
-    key = get_api_key()
+
     if pdf_bytes is None:
-        return ("현재 선택된 백서가 없습니다. **AI에게 질문하기**에서 PDF를 업로드한 후 질문해 주세요.\n\n"
-                "※ 아직 문서를 검색하지 않았습니다."), []
-    if not key:
-        return ("**UI 미리보기 모드입니다.** PDF는 업로드되었지만 AI 답변을 생성하려면 "
-                "Streamlit Cloud의 앱 설정 → Secrets에 `OPENAI_API_KEY`를 등록해야 합니다.\n\n"
-                "※ 현재는 실제 RAG 답변이 아닙니다."), []
-    from langchain_openai import ChatOpenAI
+        return (
+            "먼저 PDF 백서를 업로드해 주세요.",
+            []
+        )
+
+    # 2. OpenAI API 키 확인
+    api_key = get_api_key()
+
+    if not api_key:
+        return (
+            "OpenAI API 키가 설정되지 않았습니다. "
+            "Streamlit Secrets에 OPENAI_API_KEY를 등록하세요.",
+            []
+        )
+
+    # 3. PDF 해시 계산 및 RAG 불러오기
     digest = hashlib.sha256(pdf_bytes).hexdigest()
-    retriever, _, _ = build_retriever(pdf_bytes, digest, key)
-    docs = retriever.invoke(question)
-    context_parts = []
-    sources = []
-    for idx, doc in enumerate(docs, 1):
-        page = doc.metadata.get("page")
-        page_num = page + 1 if isinstance(page, int) else None
-        section = doc.metadata.get("section") or "본문"
-        excerpt = " ".join(doc.page_content.strip().split())[:200]
-        context_parts.append(f"[자료 {idx} | {document_name} | {page_num or '미상'}페이지]\n{doc.page_content}")
-        sources.append({"name":document_name, "page":page_num, "section":section, "excerpt":excerpt})
-    prompt = (
-        "당신은 KT AIVLE School 백서 기반 FAQ 학습 도우미입니다.\n"
-        "제공된 문서에 근거하여 한국어로 답하세요. 기수·트랙·시점을 혼동하지 마세요.\n"
-        "백서의 공식 안내, 선배 개인 후기, 학습 권고를 구분하세요.\n"
-        "문서에 근거가 없으면 확인할 수 없다고 답하세요. 출처 페이지를 임의로 만들지 마세요.\n"
-        "개인 출결 인정, 지원금, 평가, 수료 판정은 운영 담당자에게 확인하도록 안내하세요.\n"
-        "학습 계획에 관한 제안은 '개인 학습 권고안'이라고 구분하세요.\n\n"
-        f"[문서 발췌]\n{'\n\n'.join(context_parts)}\n\n[질문]\n{question}"
+
+    rag = build_retriever(
+        pdf_bytes,
+        digest,
+        api_key,
+        document_name
     )
-    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0, api_key=key)
-    result = llm.invoke(prompt)
-    return result.content, sources
+
+    # 4. 질문에 대한 RAG 답변 생성
+    result = rag.ask(question)
+
+    # 5. 답변과 출처 반환
+    return result.answer, result.sources
 
 
 def submit_question(question):
@@ -217,8 +221,12 @@ def document_upload(key_suffix):
             S.pdf_hash = digest
             S.pdf_bytes = content
             S.pdf_name = uploaded.name
+            S.source_choice = "첨부 PDF"
+            # 같은 페이지의 선택 위젯이 기본 PDF를 계속 가리키지 않도록 교정
+            S[f"source_{key_suffix}"] = "첨부 PDF"
             S.messages = []
-        st.caption(f"✅ {uploaded.name} · 파일 확인 완료")
+            S.audio_responses = {}
+        st.caption(f"✅ {uploaded.name} · PDF 업로드 완료")
     options = ["첨부 PDF"]
     if DEFAULT_PDF.exists():
         options.insert(0, "기본 백서")
@@ -229,10 +237,16 @@ def document_upload(key_suffix):
     if selected != S.source_choice:
         S.source_choice = selected
         S.messages = []
+        S.audio_responses = {}
     name, content = active_document()
     if name and content:
         if get_api_key():
-            st.success(f"선택한 문서: {name} · 질문 시 자동 분석")
+            try:
+                digest = hashlib.sha256(content).hexdigest()
+                rag = build_retriever(content, digest, get_api_key(), name)
+                st.success(f"✅ 검색 준비 완료 · {name} · {rag.page_count}개 페이지 객체 · {rag.chunk_count}개 청크")
+            except Exception as exc:
+                st.error(f"PDF 벡터화 실패: {type(exc).__name__}. API 키와 PDF 파일을 확인해 주세요.")
         else:
             st.info(f"선택한 문서: {name} · AI 연결 전 UI 테스트 모드")
     else:
@@ -248,6 +262,7 @@ def rerun_after_question(prefix):
         st.rerun()
 
 
+# [셀 05] 채팅 UI/음성 질문/음성 답변/대화 저장 | Ctrl+F로 [수정 포인트 ...] 검색
 def render_message_history():
     if not S.messages:
         st.info("추천 질문을 누르거나 직접 질문해 보세요.")
@@ -266,8 +281,23 @@ def render_message_history():
                         for j, src in enumerate(srcs, 1):
                             page_label = f"{src['page']}페이지" if src["page"] else "페이지 미상"
                             st.markdown(f"**{j}. {src['name']} · {page_label} · {src['section']}**")
+                            if src.get("ids"):
+                                st.caption("백서 근거 번호(발췌에서 검출): " + ", ".join(src["ids"]))
                             st.caption(src["excerpt"])
                             st.caption("원문은 업로드한 PDF의 해당 페이지에서 확인해 주세요.")
+                # [추가 기능] 3차 AI 개인비서의 TTS를 가져와 답변을 음성으로 재생합니다.
+                speech_key = hashlib.sha256(msg["content"].encode("utf-8")).hexdigest()[:20]
+                if st.button("🔊 답변 듣기", key=f"listen_{i}", help="요청할 때만 TTS API를 사용합니다"):
+                    if not get_api_key():
+                        st.warning("OPENAI_API_KEY가 필요합니다.")
+                    else:
+                        try:
+                            with st.spinner("음성 답변을 생성하는 중..."):
+                                S.audio_responses[speech_key] = synthesize_answer(msg["content"], get_api_key())
+                        except Exception as exc:
+                            st.error(f"음성 변환에 실패했습니다 ({type(exc).__name__}).")
+                if speech_key in S.audio_responses:
+                    st.audio(S.audio_responses[speech_key], format="audio/mp3")
                 c1, c2 = st.columns([1,1])
                 with c1:
                     if st.button("👍 도움이 됐어요", key=f"fb_yes_{i}"):
@@ -278,6 +308,47 @@ def render_message_history():
                         S.feedback[i] = "incorrect"
                         st.toast("검토 의견을 기록했어요. (현재 세션에만 저장)")
 
+
+# [추가 기능/수정 포인트 UI-V1] Streamlit 기본 마이크 녹음 + 3차 프로젝트 Whisper(STT)
+def render_voice_question(prefix):
+    """음성 입력은 문자로 변환한 뒤 사용자가 확인하고 전송하도록 합니다."""
+    with st.expander("🎙️ 음성으로 질문하기", expanded=False):
+        st.caption("마이크 녹음 → 한국어 음성 인식 → 문장 확인·수정 → 백서 RAG 질문")
+        audio = st.audio_input("질문을 녹음해 주세요", key=f"mic_{prefix}")
+        if audio is None:
+            return
+        raw = audio.getvalue()
+        voice_digest = hashlib.sha256(raw).hexdigest()
+        if S.get(f"voice_digest_{prefix}") != voice_digest:
+            S[f"voice_digest_{prefix}"] = voice_digest
+            S[f"voice_edit_{prefix}"] = ""
+            if not get_api_key():
+                st.warning("음성 인식에는 OpenAI API 키가 필요합니다.")
+            else:
+                try:
+                    with st.spinner("한국어 음성을 텍스트로 변환하는 중..."):
+                        S[f"voice_edit_{prefix}"] = transcribe_audio(raw, get_api_key())
+                except Exception as exc:
+                    st.error(f"음성 인식 중 오류가 발생했습니다 ({type(exc).__name__}). 다시 녹음해 주세요.")
+        if S.get(f"voice_edit_{prefix}"):
+            st.text_area("인식한 질문 (전송 전 수정 가능)", key=f"voice_edit_{prefix}", height=75)
+            if st.button("이 음성 질문 전송", key=f"voice_send_{prefix}", type="primary"):
+                submit_question(S.get(f"voice_edit_{prefix}", ""))
+                rerun_after_question(prefix)
+
+
+def export_conversation():
+    """[추가 기능] 개인 대화 기록을 UTF-8 텍스트로 내보냅니다. 서버 DB에는 저장하지 않습니다."""
+    items = ["AIVLE Guide | 나의 학습 질문 기록", ""]
+    for message in S.messages:
+        title = "나" if message["role"] == "user" else "AIVLE Guide"
+        items.extend([f"[{title}]", message["content"], ""])
+        if message["role"] == "assistant" and message.get("sources"):
+            used = message["sources"][:5]
+            items.append("검색 근거: " + " / ".join(
+                f"{x.get('id','D?')} {x['name']} PDF {x.get('page') or '?'}쪽" for x in used))
+            items.append("")
+    return "\n".join(items)
 
 def render_questions(prefix, compact=False):
     # 질문 입력창 옆의 클립 아이콘으로도 문서를 업로드/선택할 수 있습니다.
@@ -296,6 +367,7 @@ def render_questions(prefix, compact=False):
     with attach_col:
         with st.popover("📎", help="백서 PDF 첨부", use_container_width=True):
             document_upload(f"attach_{prefix}")
+    render_voice_question(prefix)
     st.caption("✨ 추천 질문")
     options = QUESTIONS[:4] if compact else QUESTIONS
     cols = st.columns(2)
@@ -327,7 +399,7 @@ def render_top_five():
 
 @st.dialog("💬 AIVLE Guide AI 도우미", width="large")
 def chatbot_dialog():
-    st.caption("FAQ 기반 간편 대화 · 더 큰 화면은 '전체 화면 열기'를 눌러주세요.")
+    st.caption("통합 백서 PDF에 근거하는 질문·답변 · 큰 화면은 '전체 화면 열기'")
     with st.expander("📄 학습 백서 업로드 / 자료 변경", expanded=False):
         document_upload("dialog")
     with st.container(height=280, border=True):
@@ -342,9 +414,11 @@ def chatbot_dialog():
     with c2:
         if st.button("🗑️ 대화 초기화", key="popup_clear", use_container_width=True):
             S.messages = []
+            S.audio_responses = {}
             st.rerun()
 
 
+# [셀 06] 사이드바 및 전체 페이지 디자인 | Ctrl+F로 [수정 포인트 ...] 검색
 with st.sidebar:
     st.markdown("## 🎓 AIVLE Guide")
     st.caption("에이블스쿨 학습·정보 길잡이")
@@ -568,7 +642,9 @@ elif S.page == "문의":
 
 elif S.page == "AI에게 질문하기":
     st.title("💬 AI에게 질문하기")
-    st.caption("백서를 기반으로 모집·교육·운영 질문에 답하는 FAQ 학습 도우미")
+    st.caption("PDF 업로드 → 자동 청킹·임베딩·Chroma 검색 → 백서 근거 기반 답변")
+    st.info("📄 백서 PDF를 등록하고 질문해 보세요. 답변은 문서의 근거를 찾아 작성하며, "
+            "각 답변에서 출처·PDF 페이지를 확인할 수 있습니다.")
     with st.expander("📎 학습 백서 업로드 / 답변 자료 선택", expanded=S.pdf_bytes is None):
         document_upload("full")
     a,b = st.columns([3,1],gap="large")
@@ -576,8 +652,13 @@ elif S.page == "AI에게 질문하기":
         with st.container(height=380,border=True):
             render_message_history()
         render_questions("full",compact=False)
+        if S.messages:
+            st.download_button("📥 대화 기록 TXT 저장", export_conversation().encode("utf-8-sig"),
+                               file_name="aivle_guide_conversation.txt", mime="text/plain",
+                               key="save_chat", use_container_width=True)
         if st.button("🗑️ 대화 초기화",key="full_clear"):
             S.messages = []
+            S.audio_responses = {}
             st.rerun()
     with b:
         st.subheader("🔥 많이 묻는 질문 TOP 5")
