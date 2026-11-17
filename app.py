@@ -161,7 +161,7 @@ st.markdown("<style>" + vars_css + """
  color:#FFFFFF!important;-webkit-text-fill-color:#FFFFFF!important;
 }
 /* 플로팅 AI 버튼: 조금 더 작게, 위로 이동, 글자는 더 크게 */
-.st-key-chat_float {position:fixed;right:25px;bottom:37px;z-index:9998;width:56px;}
+.st-key-chat_float {position:fixed;right:25px;bottom:50px;z-index:9998;width:56px;}
 .st-key-chat_float button,.st-key-chat_float button:hover,.st-key-chat_float button:focus {
  width:56px!important;height:56px!important;min-height:56px!important;
  border:0!important;border-radius:50%!important;background:#146F58!important;
@@ -208,7 +208,6 @@ st.markdown("<style>" + vars_css + """
 [data-testid="stSidebar"] {border-right:1px solid var(--guide-border);}
 .stApp [data-testid="stMainBlockContainer"] h1 {font-size:clamp(1.65rem,3vw,2.2rem);}
 .stApp .st-key-home_time_panel {background:var(--guide-surface);border:1px solid var(--guide-border);border-radius:16px;padding:16px 18px;}
-.stApp .st-key-home_quick_questions button {text-align:left;white-space:normal;height:auto;min-height:52px;}
 .stApp .st-key-aivle_popular button {text-align:left;white-space:normal;height:auto;}
 .stApp .st-key-chat_float button p {font-size:28px!important;line-height:1!important;}
 /* 근거 발췌, 유형, 페이지 모두 14px 통일 */
@@ -601,19 +600,17 @@ def render_schedule(prefix, editable=True, show_stats=True, show_event_list=True
     def view_changed():
         # Streamlit 버전에 따라 선택된 항목을 다시 누르면 None이 될 수 있어 월을 기본값으로 복원합니다.
         S.calendar_view = S.get(key_view) or "월"
-    st.segmented_control("시간표 보기", options, key=key_view, on_change=view_changed)
-    view = S.calendar_view
-    nav_a, nav_b, nav_c, picker = st.columns([1, 1, 1, 3], vertical_alignment="bottom")
+    # 한 줄 구성: 이전 · 오늘 · 다음 · 기준 날짜 · 시간표 보기
+    # 날짜/보기 변경 콜백은 rerun 시 먼저 반영되므로 탐색 버튼도 현재 보기를 사용합니다.
+    nav_a, nav_b, nav_c, picker, view_picker = st.columns(
+        [1.05, 0.8, 1.05, 1.85, 2.25], vertical_alignment="bottom", gap="small"
+    )
     with nav_a:
         prev = st.button("‹ 이전", key=f"{prefix}_previous", use_container_width=True)
     with nav_b:
         now = st.button("오늘", key=f"{prefix}_today", use_container_width=True)
     with nav_c:
         following = st.button("다음 ›", key=f"{prefix}_next", use_container_width=True)
-    if prev or following:
-        S.calendar_anchor = shift_calendar(S.calendar_anchor, view, -1 if prev else 1)
-    elif now:
-        S.calendar_anchor = today_kst()
     date_key = f"{prefix}_jump_date"
     if S.get(date_key) != S.calendar_anchor:
         S[date_key] = S.calendar_anchor
@@ -621,6 +618,13 @@ def render_schedule(prefix, editable=True, show_stats=True, show_event_list=True
         S.calendar_anchor = S[date_key]
     with picker:
         st.date_input("기준 날짜", key=date_key, on_change=changed_date)
+    with view_picker:
+        st.segmented_control("시간표 보기", options, key=key_view, on_change=view_changed)
+    view = S.calendar_view
+    if prev or following:
+        S.calendar_anchor = shift_calendar(S.calendar_anchor, view, -1 if prev else 1)
+    elif now:
+        S.calendar_anchor = today_kst()
     anchor = S.calendar_anchor
     if view == "월":
         first = month_start(anchor)
@@ -1087,7 +1091,7 @@ with st.sidebar:
     document_upload()
     st.divider()
     st.markdown("[AIVLE School 공식 홈페이지](https://aivle.kt.co.kr/)")
-    st.caption("AIVLE Guide · 홈 달력 수정 v6.1")
+    st.caption("AIVLE Guide · 홈 UI 수정 v6.2")
 
 if S.page == "홈":
     # 카드 자체의 상단이 잘리던 문제를 없애기 위해 홈 소개는 HTML 카드 대신 제목/문장으로 처리.
@@ -1097,15 +1101,6 @@ if S.page == "홈":
     st.caption("질문 입력  →  백서의 관련 근거 확인  →  필요한 경우 운영 담당자에게 문의")
     if st.button("💬 AI에게 질문하기",type="primary",key="home_ai_start",use_container_width=True):
         navigate("AI에게 질문하기")
-    st.divider()
-    st.subheader("자주 궁금해하는 질문")
-    with st.container(key="home_quick_questions"):
-        qc=st.columns(2)
-        for i,q in enumerate(QUESTIONS[:4]):
-            with qc[i%2]:
-                if st.button(q,key=f"home_quick_{i}",use_container_width=True):
-                    submit_question(q)
-                    navigate("AI에게 질문하기")
     st.divider()
     with st.container(border=True, key="home_time_panel"):
         st.subheader("나의 학습 시간")
