@@ -66,7 +66,11 @@ else:
 st.markdown("<style>" + vars_css + """
 /* 공통: 여백을 충분히 확보하고 카드·제목·선 두께를 통일 */
 .stApp, [data-testid="stAppViewContainer"] {background:var(--guide-bg)!important;color:var(--guide-text)!important;}
-[data-testid="stMainBlockContainer"] {max-width:1220px!important;padding-top:1.7rem!important;padding-bottom:3rem!important;}
+[data-testid="stMainBlockContainer"] {
+    max-width: 1220px !important;
+    padding-top: 4rem !important;
+    padding-bottom: 3rem !important;
+}
 [data-testid="stSidebar"] {background:var(--guide-side)!important;color:var(--guide-text)!important;}
 .stApp h1,.stApp h2,.stApp h3,.stApp p,.stApp li,.stApp label,
 .stApp [data-testid="stMarkdownContainer"] {color:var(--guide-text);}
@@ -939,31 +943,39 @@ with st.sidebar:
     st.markdown("[KT AIVLE School 공식 홈페이지](https://aivle.kt.co.kr/)")
 
 if S.page == "홈":
-    st.markdown("""<div class="hero"><small>KT AIVLE SCHOOL</small>
-      <h1>AI와 DX, 내일의 가능성을 만나다</h1>
-      <p>KT AIVLE School은 AI·데이터·클라우드를 활용해 실제 기업의 문제를 해결하는 경험을 쌓는
-      실무형 인재양성 프로그램입니다. 기초 학습부터 프로젝트, 진로 준비까지 이어집니다.</p>
-      </div>""",unsafe_allow_html=True)
-    c1,c2,c3=st.columns(3)
+    # 홈 상단 소개 카드
+    with st.container(border=True):
+        st.caption("KT AIVLE SCHOOL")
+        st.markdown("### AI와 DX, 내일의 가능성을 만나다")
+        st.write(
+            "KT AIVLE School은 AI·데이터·클라우드를 활용해 "
+            "실제 기업의 문제를 해결하는 경험을 쌓는 "
+            "실무형 인재양성 프로그램입니다. "
+            "기초 학습부터 프로젝트, 진로 준비까지 이어집니다."
+        )
+    c1, c2, c3 = st.columns(3)
     with c1:
-        if st.button("🎓 교육과정 안내",use_container_width=True): navigate("에이블스쿨이란?")
+        if st.button("🎓 교육과정 안내", use_container_width=True):
+            navigate("에이블스쿨이란?")
     with c2:
-        if st.button("📚 나만의 학습전략",use_container_width=True): navigate("학습전략")
+        if st.button("📚 나만의 학습전략", use_container_width=True):
+            navigate("학습전략")
     with c3:
-        if st.button("💬 AI 도우미 시작",type="primary",use_container_width=True): navigate("AI에게 질문하기")
+        if st.button("💬 AI 도우미 시작", type="primary", use_container_width=True):
+            navigate("AI에게 질문하기")
     st.divider()
     st.subheader("나의 학습 계획")
     # 학습전략의 목표·실행점검·시간표 데이터와 실시간 동기화합니다.
-    completed_checks=sum(bool(S.get(f"execute_{i}",False)) for i in range(5))
-    a,b,c = st.columns(3)
+    completed_checks = sum(bool(S.get(f"execute_{i}", False)) for i in range(5))
+    a, b, c = st.columns(3)
     a.metric("이번 주 목표", f"{S.weekly_hours}시간")
     b.metric("학습 수준", S.level)
     c.metric("실행 점검", f"{completed_checks}/5")
     st.caption(f"학습 목표: {S.goal}")
     if S.study_logs:
-        last=S.study_logs[-1]
+        last = S.study_logs[-1]
         st.caption(f"최근 실행 기록 · {last.get('날짜','')} · {last.get('실제시간',0)}시간 학습 · 실습 {last.get('실습완료',0)}개")
-    render_schedule("home",editable=True)
+    render_schedule("home", editable=True)
     st.caption("시간표와 기록은 현재 세션에 저장됩니다. 장기 보관은 환경설정의 JSON 백업을 이용하세요.")
 
 
