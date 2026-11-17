@@ -1,73 +1,138 @@
-# [셀 03] UI 디자인/CSS/메뉴/세션/질문 데이터 | Ctrl+F로 [수정 포인트 ...] 검색
-"""AIVLE Guide: Streamlit multi-page UI + optional PDF RAG.
-UI prototype works without OpenAI API key. Full Q&A requires configured key and PDF.
-"""
+# [셀 03] 공통 UI, 디자인, 사용자 설정, 질문 데이터
+"""AIVLE Guide 3차 통합본 — 2차 기능 보존 및 UI 고도화."""
 import csv
 import hashlib
-import re
+import html
 import io
+import json
 import os
+import re
 import sqlite3
 import tempfile
-from datetime import date
+import uuid
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import streamlit as st
 
 st.set_page_config(
     page_title="AIVLE Guide | 에이블스쿨 학습 도우미",
-    page_icon="🎓",
-    layout="wide",
-    initial_sidebar_state="expanded",
+    page_icon="🎓", layout="wide", initial_sidebar_state="expanded",
 )
 
-st.markdown("""
-<style>
-.stApp {background:#F8FBFA;}
-[data-testid="stSidebar"] {background:#ECF6F1;}
-h1,h2,h3 {color:#174F48;}
-.hero {background:linear-gradient(110deg,#DAF2E8,#F8FCFA);border:1px solid #C8E2D5;
-       border-radius:19px;padding:31px 35px;margin:4px 0 22px;}
-.hero small {color:#287E6A;letter-spacing:2px;font-weight:700;}
-.hero h1 {margin:9px 0;font-size:34px;}
-.hero p {color:#4B6D62;font-size:16px;line-height:1.65;}
-.panel {border:1px solid #D5E8DD;border-radius:15px;background:white;padding:18px;min-height:116px;}
-.panel strong {color:#155942;}
-.muted {font-size:13px;color:#678477;}
-/* 라디오 내비게이션을 없애고 버튼만 쓰므로 선택 동그라미가 생기지 않습니다. */
-[data-testid="stSidebar"] .stButton button {text-align:left;justify-content:flex-start;
-  background:transparent;border:0;border-radius:8px;box-shadow:none;color:#1E584B;
-  font-weight:600;padding:10px 13px;min-height:41px;}
-[data-testid="stSidebar"] .stButton button:hover {background:#D7ECE0;color:#104B3B;}
-[data-testid="stSidebar"] .stButton button[kind="primary"] {background:#D1E9DC!important;
-  color:#13583F!important;border-left:3px solid #148465!important;}
-button[kind="primary"],button[data-testid="stBaseButton-primary"] {
- background:#17745F!important;border-color:#17745F!important;color:white!important;}
-/* 우측 하단 플로팅 이모지 버튼: 기존 112px에서 78px로 내리고, 크기는 키우고 그림자는 줄임 */
-.st-key-chat_float {position:fixed;right:25px;bottom:78px;z-index:9998;width:62px;}
-.st-key-chat_float button {width:62px!important;height:62px!important;min-height:62px!important;
- border:0!important;border-radius:50%!important;background:#146D57!important;
- color:white!important;font-size:33px!important;padding:0!important;
- box-shadow:0 3px 9px rgba(16,58,44,.15)!important;}
-.st-key-chat_float button:hover {background:#115941!important;transform:translateY(-1px);}
-/* 채팅 및 인기 질문에 쓰이는 작은 안내 */
-.helper {padding:11px 14px;background:#E9F5EF;border-radius:11px;color:#275846;font-size:13px;}
-</style>
-""", unsafe_allow_html=True)
+def today_kst():
+    return datetime.now(ZoneInfo("Asia/Seoul")).date()
 
 S = st.session_state
-for key, default in {
+DEFAULT_MENU = ["AI에게 질문하기", "홈", "에이블스쿨이란?", "공지사항", "노하우", "학습전략", "문의", "환경설정"]
+LOGO_URL = "https://raw.githubusercontent.com/Jangrae/img/master/aivle.png"
+DEFAULTS = {
     "page": "홈", "messages": [], "pdf_hash": None, "pdf_name": None,
     "pdf_bytes": None, "source_choice": "첨부 PDF", "feedback": {},
     "weekly_hours": 8, "level": "기초", "goal": "Python·데이터 분석 기초 익히기",
     "days": {"월":1.0,"화":1.0,"수":1.0,"목":1.0,"금":1.0,"토":2.0,"일":1.0},
-    "study_checks": {}, "study_logs": [], "audio_responses": {},
-}.items():
+    "study_checks": {}, "study_logs": [], "study_events": [],
+    "calendar_anchor": today_kst(), "audio_responses": {},
+    "answer_format": "표준", "answer_tone": "차분한", "tts_model": "gpt-4o-mini-tts",
+    "tts_voice": "marin", "tts_speed": 1.0, "stt_model": "whisper-1",
+    "theme_mode": "시스템", "menu_order": list(DEFAULT_MENU), "chat_height": 500,
+}
+for key, default in DEFAULTS.items():
     if key not in S:
         S[key] = default
 
-MENU = ["홈", "에이블스쿨이란?", "공지사항", "노하우", "학습전략", "문의"]
-MENU_ICON = {"홈":"🏠", "에이블스쿨이란?":"🎓", "공지사항":"📢", "노하우":"💡", "학습전략":"📚", "문의":"✉️"}
+# [UI-S01] Streamlit의 정적 테마를 재설정하는 대신 앱 전체 색을 CSS로 전환합니다.
+# 시스템 선택 시 브라우저/OS의 prefers-color-scheme을 따릅니다.
+LIGHT = {"bg":"#F8FBFA", "side":"#ECF6F1", "surface":"#FFFFFF", "text":"#203F38",
+         "sub":"#537568", "border":"#D5E8DD", "hero_a":"#DAF2E8", "hero_b":"#F8FCFA",
+         "lightbtn":"#E8F4EC", "soft":"#F0F8F4"}
+DARK = {"bg":"#111B1A", "side":"#172622", "surface":"#22302C", "text":"#E9F4EF",
+        "sub":"#B2C9BF", "border":"#476056", "hero_a":"#27493D", "hero_b":"#1A2D27",
+        "lightbtn":"#2A463A", "soft":"#20382E"}
+
+def css_vars(palette):
+    return "".join(f"--guide-{key.replace('_','-')}:{value};" for key,value in palette.items())
+
+if S.theme_mode == "다크":
+    vars_css = f":root {{{css_vars(DARK)}}}"
+elif S.theme_mode == "라이트":
+    vars_css = f":root {{{css_vars(LIGHT)}}}"
+else:
+    vars_css = (f":root {{{css_vars(LIGHT)}}} "
+                f"@media (prefers-color-scheme:dark) {{:root {{{css_vars(DARK)}}}}}")
+
+st.markdown("<style>" + vars_css + """
+.stApp, [data-testid="stAppViewContainer"] {background:var(--guide-bg)!important;color:var(--guide-text)!important;}
+[data-testid="stSidebar"] {background:var(--guide-side)!important;color:var(--guide-text)!important;}
+.stApp h1,.stApp h2,.stApp h3,.stApp p,.stApp li,.stApp label,
+.stApp [data-testid="stMarkdownContainer"] {color:var(--guide-text);}
+.stApp [data-testid="stCaptionContainer"] {color:var(--guide-sub)!important;}
+.stApp [data-testid="stVerticalBlockBorderWrapper"] > div,
+.stApp [data-testid="stExpander"],.stApp [data-testid="stChatMessage"] {
+  border-color:var(--guide-border)!important;}
+.stApp input,.stApp textarea,.stApp [data-baseweb="select"] > div {
+  background:var(--guide-surface)!important;color:var(--guide-text)!important;
+  border-color:var(--guide-border)!important;}
+.hero {background:linear-gradient(110deg,var(--guide-hero-a),var(--guide-hero-b));
+  border:1px solid var(--guide-border);border-radius:19px;padding:31px 35px;margin:4px 0 22px;}
+.hero small {color:#40AB8F;letter-spacing:1.5px;font-weight:700;}
+.hero h1 {margin:9px 0;font-size:34px;color:var(--guide-text)!important;}
+.hero p {color:var(--guide-sub)!important;font-size:16px;line-height:1.65;}
+.panel {border:1px solid var(--guide-border);border-radius:15px;
+  background:var(--guide-surface);padding:18px;min-height:116px;}
+.panel strong {color:var(--guide-text);}
+.muted {font-size:13px;color:var(--guide-sub);}
+/* [UI-S02] 사이드바의 AI 메뉴를 고유 색으로 고정하고 다른 메뉴와 구별합니다. */
+[data-testid="stSidebar"] .stButton button {text-align:left;justify-content:flex-start;
+  background:transparent;border:0;border-radius:9px;box-shadow:none;color:var(--guide-text);
+  font-weight:600;padding:10px 13px;min-height:42px;}
+[data-testid="stSidebar"] .stButton button:hover {background:var(--guide-lightbtn)!important;}
+[data-testid="stSidebar"] .stButton button[kind="primary"]:not(.st-key-nav_ai button) {
+  background:var(--guide-lightbtn)!important;color:var(--guide-text)!important;}
+.st-key-nav_ai button,.st-key-nav_ai button:hover,.st-key-nav_ai button:focus,
+.st-key-nav_ai button:active {background:linear-gradient(105deg,#12765E,#13A68B)!important;
+  color:#FFFFFF!important;font-weight:800!important;border:1px solid #31BBA2!important;
+  box-shadow:0 4px 13px rgba(8,119,88,.22)!important;min-height:52px!important;}
+button[kind="primary"],button[data-testid="stBaseButton-primary"] {
+  background:#17745F!important;border-color:#17745F!important;color:white!important;}
+/* [UI-S03] 추천 버튼의 선택 후 흰색 배경/포커스 표시 방지 */
+.st-key-recs_full button,.st-key-recs_popup button,
+.st-key-recs_full button:focus,.st-key-recs_popup button:focus,
+.st-key-recs_full button:active,.st-key-recs_popup button:active {
+  background:var(--guide-lightbtn)!important;color:var(--guide-text)!important;
+  border:1px solid var(--guide-border)!important;box-shadow:none!important;outline:0!important;}
+.st-key-recs_full button:hover,.st-key-recs_popup button:hover {
+  background:var(--guide-hero-a)!important;border-color:#6CAE9A!important;}
+/* [UI-S04] 플로팅 채팅 아이콘 크게 (버튼 88px / 이모지 56px) */
+.st-key-chat_float {position:fixed;right:26px;bottom:38px;z-index:9998;width:88px;}
+.st-key-chat_float button {width:88px!important;height:88px!important;min-height:88px!important;
+  border:0!important;border-radius:50%!important;background:#146D57!important;
+  color:white!important;font-size:56px!important;line-height:1!important;padding:0!important;
+  box-shadow:0 5px 16px rgba(16,58,44,.22)!important;}
+.st-key-chat_float button:hover {background:#115941!important;transform:translateY(-2px);}
+/* [UI-S05] 근거 표시는 제목/원문/근거번호가 모두 동일한 14px */
+.evidence-card {background:var(--guide-surface);color:var(--guide-text);
+  border:1px solid var(--guide-border);border-radius:9px;margin:7px 0;padding:12px 14px;}
+.evidence-card p,.evidence-card div,.evidence-card strong {
+  color:var(--guide-text)!important;font-size:14px!important;line-height:1.6!important;}
+.evidence-card .evidence-excerpt {white-space:pre-wrap;overflow-wrap:anywhere;}
+/* [UI-S06] 학습 시간표: 한 시간 내 학습 분량이 클수록 진한 초록 */
+.guide-heatmap-wrap {overflow:auto;max-height:620px;border:1px solid var(--guide-border);
+  border-radius:12px;background:var(--guide-surface);margin:10px 0 16px;}
+.guide-heatmap {border-collapse:separate;border-spacing:2px;width:100%;min-width:660px;
+  color:var(--guide-text);font-size:12px;}
+.guide-heatmap th {background:var(--guide-surface);color:var(--guide-text);position:sticky;
+  top:0;z-index:2;padding:7px 5px;min-width:74px;border-bottom:1px solid var(--guide-border);}
+.guide-heatmap td {height:27px;text-align:center;border-radius:4px;
+  background:var(--guide-soft);color:var(--guide-text);font-size:11px;min-width:70px;}
+.guide-heatmap td span {color:inherit;font-size:11px;font-weight:650;}
+.guide-heatmap .guide-hour {position:sticky;left:0;z-index:1;background:var(--guide-surface);
+  font-weight:600;color:var(--guide-sub);min-width:68px;padding:4px;}
+</style>""", unsafe_allow_html=True)
+
+MENU_ICON = {"AI에게 질문하기":"💬", "홈":"🏠", "에이블스쿨이란?":"🎓",
+             "공지사항":"📢", "노하우":"💡", "학습전략":"📚", "문의":"✉️", "환경설정":"⚙️"}
 QUESTIONS = [
     "비전공자도 에이블스쿨에 지원할 수 있나요?",
     "AI 개발자와 DX 컨설턴트는 무엇이 다른가요?",
@@ -78,27 +143,23 @@ QUESTIONS = [
     "국민내일배움카드가 없어도 지원할 수 있나요?",
     "훈련장려금 11만 6천 원과 30만 원은 왜 다른가요?",
 ]
-FOLLOW_UP = ["공식 안내와 선배 후기는 어떻게 구분하나요?", "프로젝트를 준비하는 팁을 알려주세요.", "학습 계획은 어떻게 세우나요?"]
-DB = Path(tempfile.gettempdir()) / "aivle_guide_qcounts_v2.sqlite3"
+DB = Path(tempfile.gettempdir()) / "aivle_guide_qcounts_v3.sqlite3"
 DEFAULT_PDF = Path(__file__).parent / "AIVLE School 백서.pdf"
 
 
 def navigate(page):
-    # 위젯 key를 바꾸지 않고 독립 세션 상태만 변경: WidgetAlreadyInstantiatedError 방지
     S.page = page
     st.rerun()
 
 
 def count_question(q):
     q = " ".join(q.strip().split())[:200]
-    if not q:
-        return
+    if not q: return
     try:
         with sqlite3.connect(DB, timeout=10) as conn:
             conn.execute("CREATE TABLE IF NOT EXISTS counts (q TEXT PRIMARY KEY, n INTEGER NOT NULL)")
             conn.execute("INSERT INTO counts(q,n) VALUES (?,1) ON CONFLICT(q) DO UPDATE SET n=n+1", (q,))
-    except sqlite3.Error:
-        pass
+    except sqlite3.Error: pass
 
 
 def top_questions():
@@ -106,45 +167,31 @@ def top_questions():
         with sqlite3.connect(DB, timeout=10) as conn:
             conn.execute("CREATE TABLE IF NOT EXISTS counts (q TEXT PRIMARY KEY, n INTEGER NOT NULL)")
             return conn.execute("SELECT q,n FROM counts ORDER BY n DESC, q LIMIT 5").fetchall()
-    except sqlite3.Error:
-        return []
+    except sqlite3.Error: return []
 
 
 def get_api_key():
-    # GitHub/Colab 토큰은 앱 코드에 쓰지 않음. Streamlit Secrets에만 OPENAI_API_KEY 설정.
     key = os.getenv("OPENAI_API_KEY", "")
-    if key:
-        return key
-    try:
-        return st.secrets.get("OPENAI_API_KEY", "")
-    except Exception:
-        # Secrets를 아직 등록하지 않은 UI 미리보기에서도 앱이 실행되도록 처리
-        return ""
-
-
-# [셀 04] PDF 저장/벡터화 캐시/RAG 호출/질문 저장 | Ctrl+F로 [수정 포인트 ...] 검색
-# [UI/핵심 연결] RAG는 rag_core.py, 음성은 voice_core.py에 각각 모듈화했습니다.
+    if key: return key
+    try: return st.secrets.get("OPENAI_API_KEY", "")
+    except Exception: return ""
+# [셀 04] PDF 선택 / RAG 연결 / 학습계획·시간표 공통 로직
 from rag_core import rag_pipeline
-from voice_core import transcribe_audio, synthesize_answer
+from voice_core import transcribe_audio, synthesize_answer, TTS_MODELS, ALL_VOICES, CLASSIC_VOICES, STT_MODELS
 
-
-@st.cache_resource(show_spinner="백서를 분석하고 검색 인덱스를 생성하는 중...", max_entries=4)
+@st.cache_resource(show_spinner="백서 검색 인덱스를 만드는 중...", max_entries=4)
 def build_retriever(file_bytes, file_hash, api_key, document_name):
-    """[교안 46쪽 필수] PDF bytes를 임시 .pdf 경로로 저장 → rag_pipeline(path)에 전달.
-
-    Streamlit은 클릭마다 앱을 다시 실행하지만, 같은 파일 해시에는 캐시된
-    RAG 객체를 재사용합니다. 문서를 바꾸면 새 해시로 재임베딩됩니다.
-    """
+    """업로드 PDF bytes → 실제 PDF 파일 경로 → RAG → 재사용 캐시."""
     with tempfile.NamedTemporaryFile(mode="wb", suffix=".pdf", delete=False) as temp:
         temp.write(file_bytes)
         pdf_path = temp.name
     try:
         rag = rag_pipeline(pdf_path, api_key)
     finally:
-        if os.path.exists(pdf_path):
-            os.unlink(pdf_path)
+        if os.path.exists(pdf_path): os.unlink(pdf_path)
     rag.document_name = document_name
     return rag
+
 
 def active_document():
     if S.source_choice == "기본 백서" and DEFAULT_PDF.exists():
@@ -154,320 +201,506 @@ def active_document():
     return None, None
 
 
-
 def answer_question(question):
-    """
-    활성화된 PDF 백서를 검색하여
-    RAG 답변과 출처 정보를 반환합니다.
-    """
-
-    # 1. 현재 선택한 PDF 확인
     document_name, pdf_bytes = active_document()
-
     if pdf_bytes is None:
-        return (
-            "먼저 PDF 백서를 업로드해 주세요.",
-            []
-        )
-
-    # 2. OpenAI API 키 확인
+        return "사이드바의 '백서 업로드'에서 PDF 파일을 먼저 등록해 주세요.", []
     api_key = get_api_key()
-
     if not api_key:
-        return (
-            "OpenAI API 키가 설정되지 않았습니다. "
-            "Streamlit Secrets에 OPENAI_API_KEY를 등록하세요.",
-            []
-        )
-
-    # 3. PDF 해시 계산 및 RAG 불러오기
+        return "OPENAI_API_KEY가 없습니다. Streamlit Secrets에 API 키를 등록해 주세요.", []
     digest = hashlib.sha256(pdf_bytes).hexdigest()
-
-    rag = build_retriever(
-        pdf_bytes,
-        digest,
-        api_key,
-        document_name
-    )
-
-    # 4. 질문에 대한 RAG 답변 생성
-    result = rag.ask(question)
-
-    # 5. 답변과 출처 반환
+    rag = build_retriever(pdf_bytes, digest, api_key, document_name)
+    result = rag.ask(question, answer_format=S.answer_format)
     return result.answer, result.sources
+
+
+def tone_render(text):
+    """근거 답변 본문은 공통으로 보존하고 문장 앞의 안내 어조만 바꿉니다.
+
+    모든 톤은 동일한 RAG 답변과 동일한 출처를 공유하므로 사실 내용은 달라지지 않습니다.
+    """
+    openers = {
+        "차분한": "",
+        "다정한": "차근차근 함께 살펴볼게요.\n\n",
+        "엄격한": "확인된 근거와 조건을 중심으로 정리합니다.\n\n",
+        "자신감을 주는": "좋아요. 중요한 내용을 하나씩 짚어볼게요.\n\n",
+        "격려하는 코치": "목표를 분명히 하고 핵심부터 확인해 볼까요?\n\n",
+    }
+    return openers.get(S.answer_tone, "") + text
 
 
 def submit_question(question):
     question = question.strip()
-    if not question:
-        return
+    if not question: return
     S.messages.append({"role":"user", "content":question})
     count_question(question)
     try:
         response, sources = answer_question(question)
     except Exception as exc:
-        response = f"문서 검색 또는 답변 생성 중 오류가 발생했습니다: `{type(exc).__name__}`. API 키·PDF·설치 패키지를 확인해 주세요."
+        response = (f"문서 검색 또는 답변 생성 중 오류가 발생했습니다: `{type(exc).__name__}`. "
+                    "API 키·백서·설치 패키지를 확인해 주세요.")
         sources = []
-    S.messages.append({"role":"assistant", "content":response, "sources":sources})
+    S.messages.append({"role":"assistant", "content":response, "sources":sources, "question":question})
 
 
-def document_upload(key_suffix):
-    st.markdown("**📄 백서 문서 선택**")
-    uploaded = st.file_uploader("PDF 업로드", type=["pdf"], key=f"upload_{key_suffix}")
+def document_upload():
+    """사이드바 유일한 PDF 업로드 영역. Streamlit 기본 드래그앤드롭 지원."""
+    st.markdown("**📄 백서 업로드**")
+    uploaded = st.file_uploader("PDF 파일을 끌어놓거나 찾아보기", type=["pdf"], key="sidebar_pdf_upload")
     if uploaded is not None:
         content = uploaded.getvalue()
         digest = hashlib.sha256(content).hexdigest()
         if digest != S.pdf_hash:
-            S.pdf_hash = digest
-            S.pdf_bytes = content
-            S.pdf_name = uploaded.name
+            S.pdf_hash, S.pdf_bytes, S.pdf_name = digest, content, uploaded.name
             S.source_choice = "첨부 PDF"
-            # 같은 페이지의 선택 위젯이 기본 PDF를 계속 가리키지 않도록 교정
-            S[f"source_{key_suffix}"] = "첨부 PDF"
-            S.messages = []
-            S.audio_responses = {}
-        st.caption(f"✅ {uploaded.name} · PDF 업로드 완료")
+            # selectbox가 이전에 '기본 백서'를 가리키더라도 새 업로드 PDF를 즉시 선택합니다.
+            S["sidebar_source_select"] = "첨부 PDF"
+            S.messages, S.audio_responses = [], {}
+        st.caption(f"✅ {uploaded.name}")
     options = ["첨부 PDF"]
-    if DEFAULT_PDF.exists():
-        options.insert(0, "기본 백서")
-    # 선택값을 key가 없는 독립 선택 위젯에서 관리
-    selected = st.selectbox("답변에 사용할 자료", options,
-                            index=options.index(S.source_choice) if S.source_choice in options else 0,
-                            key=f"source_{key_suffix}")
+    if DEFAULT_PDF.exists(): options.insert(0, "기본 백서")
+    selected = st.selectbox("사용할 답변 자료", options,
+        index=options.index(S.source_choice) if S.source_choice in options else 0,
+        key="sidebar_source_select")
     if selected != S.source_choice:
         S.source_choice = selected
-        S.messages = []
-        S.audio_responses = {}
-    name, content = active_document()
-    if name and content:
-        if get_api_key():
-            try:
-                digest = hashlib.sha256(content).hexdigest()
-                rag = build_retriever(content, digest, get_api_key(), name)
-                st.success(f"✅ 검색 준비 완료 · {name} · {rag.page_count}개 페이지 객체 · {rag.chunk_count}개 청크")
-            except Exception as exc:
-                st.error(f"PDF 벡터화 실패: {type(exc).__name__}. API 키와 PDF 파일을 확인해 주세요.")
-        else:
-            st.info(f"선택한 문서: {name} · AI 연결 전 UI 테스트 모드")
+        # 서로 다른 PDF의 근거 D번호가 한 대화에 섞이지 않게 초기화합니다.
+        S.messages, S.audio_responses = [], {}
+    current_name, current_bytes = active_document()
+    if not current_bytes:
+        st.caption("PDF가 아직 없습니다. 사이드바에 드래그해서 등록해 주세요.")
+        return
+    st.caption(f"현재 문서: {current_name}")
+    if get_api_key():
+        try:
+            rag = build_retriever(current_bytes, hashlib.sha256(current_bytes).hexdigest(),
+                                  get_api_key(), current_name)
+            st.success(f"검색 준비 완료 · {rag.chunk_count}개 청크")
+        except Exception as exc:
+            st.error(f"PDF 벡터화 실패 ({type(exc).__name__}).")
     else:
-        st.info("기본 백서 파일이 없으면 PDF를 업로드해 주세요.")
-    st.caption("업로드 자료는 이 화면의 답변 자료로 사용됩니다. 개인·민감정보가 있는 문서는 업로드하지 마세요.")
+        st.caption("API 키 미설정 · 화면 미리보기 모드")
+    st.caption("업로드 문서는 현재 사용자 세션에서 사용합니다. 민감정보 업로드는 피하세요.")
 
 
 def rerun_after_question(prefix):
-    # st.dialog는 fragment이므로 질문 전송 후에도 창이 닫히지 않도록 합니다.
-    if prefix == "popup":
-        st.rerun(scope="fragment")
+    if prefix == "popup": st.rerun(scope="fragment")
+    else: st.rerun()
+
+
+# [UI-C01] 주간 시간표: 추가/수정/삭제는 동일한 session_state 리스트에 반영됩니다.
+WEEKDAYS = ["월", "화", "수", "목", "금", "토", "일"]
+CATEGORIES = ["개념 학습", "코드 실습", "복습", "프로젝트 준비", "기타"]
+
+def _minutes(hhmm):
+    hour, minute = map(int, hhmm.split(":"))
+    return hour * 60 + minute
+
+
+def event_minutes(event):
+    return max(0, _minutes(event["end"]) - _minutes(event["start"]))
+
+
+def week_start(anchor):
+    return anchor - timedelta(days=anchor.weekday())
+
+
+def weekly_events(monday):
+    end = monday + timedelta(days=7)
+    return sorted((e for e in S.study_events if monday <= date.fromisoformat(e["date"]) < end),
+                  key=lambda e: (e["date"], e["start"], e["end"]))
+
+
+def heatmap_html(monday, events):
+    heads = "".join(f"<th>{(monday+timedelta(days=d)).strftime('%m/%d')} ({WEEKDAYS[d]})</th>" for d in range(7))
+    rows = [f'<thead><tr><th>시간</th>{heads}</tr></thead><tbody>']
+    for hour in range(24):
+        t0, t1 = hour * 60, (hour + 1) * 60
+        row = [f'<tr><td class="guide-hour">{hour:02d}:00</td>']
+        for d in range(7):
+            day_iso = (monday + timedelta(days=d)).isoformat()
+            blocks = [e for e in events if e["date"] == day_iso
+                      and _minutes(e["start"]) < t1 and _minutes(e["end"]) > t0]
+            used = min(60, sum(max(0, min(t1, _minutes(e["end"])) - max(t0, _minutes(e["start"]))) for e in blocks))
+            strength = used / 60
+            background = f"rgba(19,146,111,{0.15 + 0.78*strength:.3f})" if used else "var(--guide-soft)"
+            title = html.escape(" / ".join(f"{e['start']}~{e['end']} {e['title']} ({e['category']})" for e in blocks), quote=True)
+            label = f"<span>{used}분</span>" if used else ""
+            row.append(f'<td title="{title}" style="background:{background}">{label}</td>')
+        row.append("</tr>")
+        rows.append("".join(row))
+    rows.append("</tbody>")
+    return '<div class="guide-heatmap-wrap"><table class="guide-heatmap">' + rows[0] + "".join(rows[1:]) + '</table></div>'
+
+
+def render_schedule(prefix, editable=True):
+    anchor = st.date_input("시간표 확인 날짜", value=S.calendar_anchor, key=f"{prefix}_week_anchor")
+    S.calendar_anchor = anchor
+    monday = week_start(anchor)
+    events = weekly_events(monday)
+    planned = sum(event_minutes(e) for e in events) / 60
+    finished = sum(event_minutes(e) for e in events if e["status"] == "완료") / 60
+    a, b, c = st.columns(3)
+    a.metric("등록 학습시간", f"{planned:.1f}시간")
+    b.metric("완료 표시 시간", f"{finished:.1f}시간")
+    c.metric("요일별 목표 합계", f"{sum(float(x) for x in S.days.values()):.1f}시간")
+    st.caption(f"{monday:%Y-%m-%d} ~ {(monday+timedelta(days=6)):%Y-%m-%d} · 칸이 진할수록 해당 1시간 내 학습 시간이 많습니다 (0~60분). 일정 위에 마우스를 올리면 내용을 볼 수 있어요.")
+    st.markdown(heatmap_html(monday, events), unsafe_allow_html=True)
+    if events:
+        st.dataframe([{"날짜":e["date"],"시간":f'{e["start"]}~{e["end"]}',
+                       "학습 내용":e["title"],"유형":e["category"],"상태":e["status"]} for e in events],
+                     hide_index=True, use_container_width=True)
     else:
-        st.rerun()
+        st.info("이 주에 등록된 일정이 없습니다. 아래에서 날짜·학습시간·내용을 추가하세요.")
+    if not editable: return
+    with st.expander("➕ 날짜·시간별 학습 일정 추가", expanded=not bool(events)):
+        with st.form(f"{prefix}_add", clear_on_submit=True):
+            col1, col2, col3 = st.columns(3)
+            with col1: chosen_date = st.date_input("학습 날짜", value=anchor, key=f"{prefix}_add_date")
+            with col2: start = st.time_input("시작", value=time(19, 0), step=900, key=f"{prefix}_add_start")
+            with col3: end = st.time_input("종료", value=time(20, 0), step=900, key=f"{prefix}_add_end")
+            title = st.text_input("학습 내용", placeholder="예: RAG 청킹 원리 복습", max_chars=150, key=f"{prefix}_add_title")
+            category, status = st.columns(2)
+            with category: what = st.selectbox("학습 유형", CATEGORIES, key=f"{prefix}_add_category")
+            with status: done = st.selectbox("진행 상태", ["계획", "완료"], key=f"{prefix}_add_status")
+            added = st.form_submit_button("일정 저장", type="primary", use_container_width=True)
+        if added:
+            if not title.strip(): st.warning("학습 내용을 적어 주세요.")
+            elif end <= start: st.warning("종료 시간은 시작 시간보다 뒤여야 합니다. (자정 넘는 일정은 날짜별로 나눠 등록)")
+            elif len(S.study_events) >= 1000: st.warning("한 세션에는 최대 1,000개 일정까지 등록할 수 있어요.")
+            else:
+                S.study_events.append({"id":uuid.uuid4().hex[:12], "date":chosen_date.isoformat(),
+                                       "start":start.strftime("%H:%M"), "end":end.strftime("%H:%M"),
+                                       "title":title.strip(), "category":what, "status":done})
+                S.calendar_anchor = chosen_date
+                st.rerun()
+    if events:
+        with st.expander("✏️ 기존 일정 수정 / 삭제"):
+            ids = {f"{e['date']} {e['start']}~{e['end']} · {e['title']} ({e['id'][:4]})":e["id"] for e in events}
+            selected_name = st.selectbox("수정할 일정", list(ids), key=f"{prefix}_event_choice")
+            selected = next(e for e in S.study_events if e["id"] == ids[selected_name])
+            event_key = selected["id"]
+            with st.form(f"{prefix}_edit_{event_key}"):
+                col1,col2,col3 = st.columns(3)
+                with col1: edit_date = st.date_input("날짜", value=date.fromisoformat(selected["date"]), key=f"{prefix}_date_{event_key}")
+                with col2: edit_start = st.time_input("시작", value=time.fromisoformat(selected["start"]), key=f"{prefix}_start_{event_key}")
+                with col3: edit_end = st.time_input("종료", value=time.fromisoformat(selected["end"]), key=f"{prefix}_end_{event_key}")
+                edit_title = st.text_input("내용", value=selected["title"], key=f"{prefix}_title_{event_key}")
+                x,y=st.columns(2)
+                with x: edit_category = st.selectbox("유형", CATEGORIES, index=CATEGORIES.index(selected["category"]), key=f"{prefix}_category_{event_key}")
+                with y: edit_status = st.selectbox("상태", ["계획", "완료"], index=["계획", "완료"].index(selected["status"]), key=f"{prefix}_status_{event_key}")
+                save,delete = st.columns(2)
+                with save: do_save = st.form_submit_button("수정 저장", type="primary", use_container_width=True)
+                with delete: do_delete = st.form_submit_button("이 일정 삭제", use_container_width=True)
+            if do_delete:
+                S.study_events = [e for e in S.study_events if e["id"] != event_key]
+                st.rerun()
+            if do_save:
+                if not edit_title.strip(): st.warning("내용을 적어 주세요.")
+                elif edit_end <= edit_start: st.warning("종료 시간은 시작 시간보다 뒤여야 합니다.")
+                else:
+                    selected.update({"date":edit_date.isoformat(), "start":edit_start.strftime("%H:%M"),
+                                    "end":edit_end.strftime("%H:%M"), "title":edit_title.strip(),
+                                    "category":edit_category, "status":edit_status})
+                    S.calendar_anchor = edit_date
+                    st.rerun()
 
 
-# [셀 05] 채팅 UI/음성 질문/음성 답변/대화 저장 | Ctrl+F로 [수정 포인트 ...] 검색
-def render_message_history():
+def safe_backup():
+    """개인 정보 유출을 피하기 위해 PDF·대화·API 키는 백업에 포함하지 않습니다."""
+    keys = ["level", "weekly_hours", "goal", "days", "study_events", "study_logs",
+            "menu_order", "answer_format", "answer_tone", "tts_model", "tts_voice",
+            "tts_speed", "stt_model", "theme_mode", "chat_height"]
+    data = {k:S[k] for k in keys}
+    data["study_checks"] = {str(i):bool(S.get(f"execute_{i}", False)) for i in range(5)}
+    return json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
+
+
+def restore_backup(data):
+    """허용한 설정만 가져오며 예외·큰 파일은 제한합니다."""
+    if len(data)>1024*1024: raise ValueError("백업 파일은 1MB 이하만 허용합니다.")
+    obj = json.loads(data.decode("utf-8-sig"))
+    if not isinstance(obj,dict): raise ValueError("JSON 객체 형식이어야 합니다.")
+    options = {
+        "level": ("기초", "초급", "중급"),
+        "answer_format": ("간결", "표준", "상세"),
+        "answer_tone": ("차분한", "다정한", "엄격한", "자신감을 주는", "격려하는 코치"),
+        "tts_model": TTS_MODELS, "tts_voice": ALL_VOICES,
+        "stt_model": STT_MODELS, "theme_mode": ("시스템", "라이트", "다크"),
+    }
+    for field, allowed in options.items():
+        if obj.get(field) in allowed: S[field]=obj[field]
+    if isinstance(obj.get("goal"),str): S.goal=obj["goal"][:150]
+    if isinstance(obj.get("weekly_hours"),(int,float)):
+        S.weekly_hours=int(min(30,max(1,obj["weekly_hours"])))
+    if isinstance(obj.get("chat_height"),(int,float)):
+        S.chat_height=int(min(960,max(240,obj["chat_height"])))
+    if isinstance(obj.get("tts_speed"),(int,float)): S.tts_speed=min(2.0,max(0.5,float(obj["tts_speed"])))
+    days = obj.get("days")
+    if isinstance(days,dict) and all(isinstance(days.get(k),(int,float)) and 0<=days[k]<=12 for k in WEEKDAYS):
+        S.days={k:float(days[k]) for k in WEEKDAYS}
+    evs=obj.get("study_events",[])
+    if isinstance(evs,list):
+        valid=[]
+        for e in evs[:1000]:
+            try:
+                date.fromisoformat(e["date"])
+                if e.get("category") not in CATEGORIES or e.get("status") not in ("계획","완료"): continue
+                if _minutes(e["end"]) <= _minutes(e["start"]): continue
+                if not isinstance(e.get("title"),str): continue
+                valid.append({"id":uuid.uuid4().hex[:12],"date":e["date"],"start":e["start"],
+                              "end":e["end"],"title":e["title"][:150],"category":e["category"],"status":e["status"]})
+            except (ValueError,KeyError,TypeError,AttributeError): continue
+        S.study_events=valid
+    if isinstance(obj.get("study_logs"),list):
+        S.study_logs=[x for x in obj["study_logs"][:200] if isinstance(x,dict)]
+    order=obj.get("menu_order")
+    if isinstance(order,list) and set(order)==set(DEFAULT_MENU) and len(order)==len(DEFAULT_MENU):
+        S.menu_order=["AI에게 질문하기"]+[x for x in order if x!="AI에게 질문하기"]
+    checks=obj.get("study_checks",{})
+    if isinstance(checks,dict):
+        for i in range(5):
+            S[f"execute_{i}"]=bool(checks.get(str(i),False))
+    # 기존 선택 위젯의 상태가 백업값을 가리지 않도록 초기화합니다.
+    for day in WEEKDAYS: S.pop(f"day_{day}",None)
+# [셀 05] AI 채팅: 추천 질문, 출처, 크기 조절, TTS, 후속 질문
+
+def followups_for(question):
+    """정해진 후보에서 선택하므로 후속 질문 생성으로 새로운 사실을 만들지 않습니다."""
+    q = question.lower()
+    if any(x in q for x in ("출석", "수료", "지각", "결석")):
+        return ["학교 수업 때문에 빠져도 출석 인정되나요?", "수료 기준 80%와 출석 권고 100%는 어떻게 다른가요?"]
+    if any(x in q for x in ("훈련장려금", "지원금", "내일배움카드", "자기부담")):
+        return ["훈련장려금과 실업급여를 동시에 받을 수 있나요?", "2026년 K-DT 자기부담금 면제 대상은 누구인가요?"]
+    if any(x in q for x in ("취업", "포트폴리오", "면접")):
+        return ["DX 컨설턴트에게 필요한 포트폴리오 요소는 무엇인가요?", "취업 지원 프로그램에는 무엇이 있나요?"]
+    if any(x in q for x in ("미니프로젝트", "빅프로젝트", "rag")):
+        return ["미니프로젝트와 빅프로젝트는 어떻게 다른가요?", "프로젝트를 포트폴리오로 정리하는 방법은 무엇인가요?"]
+    return ["공식 안내와 선배 후기는 어떻게 구분하나요?", "AIVLE School 학습 계획은 어떻게 세우나요?"]
+
+
+def render_message_history(prefix="full"):
     if not S.messages:
-        st.info("추천 질문을 누르거나 직접 질문해 보세요.")
-    for i, msg in enumerate(S.messages):
+        st.info("위의 추천 질문을 누르거나 아래에서 직접 질문해 보세요.")
+    last_assistant = max((i for i,m in enumerate(S.messages) if m["role"]=="assistant"), default=-1)
+    for i,msg in enumerate(S.messages):
         with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
-            if msg["role"] == "assistant":
-                srcs = msg.get("sources", [])
-                if srcs:
-                    with st.expander(f"📚 근거 보기 ({len(srcs)}개 검색 조각)"):
-                        original_name, original_bytes = active_document()
-                        if original_bytes:
-                            st.download_button("📄 원문 PDF 열기/저장", data=original_bytes,
-                                               file_name=original_name or "source.pdf", mime="application/pdf",
-                                               key=f"original_{i}")
-                        for j, src in enumerate(srcs, 1):
-                            page_label = f"{src['page']}페이지" if src["page"] else "페이지 미상"
-                            st.markdown(f"**{j}. {src['name']} · {page_label} · {src['section']}**")
-                            if src.get("ids"):
-                                st.caption("백서 근거 번호(발췌에서 검출): " + ", ".join(src["ids"]))
-                            st.caption(src["excerpt"])
-                            st.caption("원문은 업로드한 PDF의 해당 페이지에서 확인해 주세요.")
-                # [추가 기능] 3차 AI 개인비서의 TTS를 가져와 답변을 음성으로 재생합니다.
-                speech_key = hashlib.sha256(msg["content"].encode("utf-8")).hexdigest()[:20]
-                if st.button("🔊 답변 듣기", key=f"listen_{i}", help="요청할 때만 TTS API를 사용합니다"):
-                    if not get_api_key():
-                        st.warning("OPENAI_API_KEY가 필요합니다.")
-                    else:
-                        try:
-                            with st.spinner("음성 답변을 생성하는 중..."):
-                                S.audio_responses[speech_key] = synthesize_answer(msg["content"], get_api_key())
-                        except Exception as exc:
-                            st.error(f"음성 변환에 실패했습니다 ({type(exc).__name__}).")
-                if speech_key in S.audio_responses:
-                    st.audio(S.audio_responses[speech_key], format="audio/mp3")
-                c1, c2 = st.columns([1,1])
-                with c1:
-                    if st.button("👍 도움이 됐어요", key=f"fb_yes_{i}"):
-                        S.feedback[i] = "helpful"
-                        st.toast("피드백 감사합니다!")
-                with c2:
-                    if st.button("⚠️ 근거가 맞지 않아요", key=f"fb_no_{i}"):
-                        S.feedback[i] = "incorrect"
-                        st.toast("검토 의견을 기록했어요. (현재 세션에만 저장)")
+            displayed = tone_render(msg["content"]) if msg["role"]=="assistant" else msg["content"]
+            st.markdown(displayed)
+            if msg["role"]!="assistant": continue
+            srcs=msg.get("sources",[])
+            if srcs:
+                with st.expander(f"📚 근거 보기 ({len(srcs)}개 검색 근거)"):
+                    original_name,original_bytes=active_document()
+                    if original_bytes:
+                        st.download_button("📄 원문 PDF 저장", data=original_bytes,
+                            file_name=original_name or "source.pdf",mime="application/pdf",key=f"src_download_{prefix}_{i}")
+                    for j,src in enumerate(srcs,1):
+                        page_label=f"{src['page']}페이지" if src.get('page') else "페이지 미상"
+                        title=f"{j}. {src.get('name','백서')} · {page_label} · {src.get('section','본문')}"
+                        ids=", ".join(src.get("ids",[])) or "표시된 근거 번호 없음"
+                        excerpt=src.get("excerpt","")
+                        card=("<div class='evidence-card'>"
+                              f"<div><strong>{html.escape(title)}</strong></div>"
+                              f"<div>원문 근거 번호: {html.escape(ids)}</div>"
+                              f"<div class='evidence-excerpt'>{html.escape(excerpt)}</div>"
+                              "<div>상세 내용은 PDF 원문에서 확인하세요.</div></div>")
+                        st.markdown(card,unsafe_allow_html=True)
+            # [UI-C02] 음성 설정(모델·목소리·배속)과 톤이 캐시 키에 포함됩니다.
+            setting=json.dumps([displayed,S.tts_model,S.tts_voice,float(S.tts_speed)],ensure_ascii=False)
+            speech_key=hashlib.sha256(setting.encode("utf-8")).hexdigest()[:22]
+            if st.button("🔊 답변 듣기",key=f"listen_{prefix}_{i}",help="필요할 때만 TTS API를 호출합니다"):
+                if not get_api_key(): st.warning("OPENAI_API_KEY가 필요합니다.")
+                else:
+                    try:
+                        with st.spinner("선택한 설정으로 음성 생성 중..."):
+                            S.audio_responses[speech_key]=synthesize_answer(displayed,get_api_key(),
+                                model=S.tts_model,voice=S.tts_voice,speed=S.tts_speed)
+                    except Exception as exc:
+                        st.error(f"음성 변환 실패: {type(exc).__name__}. 음성 모델·목소리를 확인해 주세요.")
+            if speech_key in S.audio_responses:
+                st.audio(S.audio_responses[speech_key],format="audio/mp3")
+            c1,c2=st.columns(2)
+            with c1:
+                if st.button("👍 도움이 됐어요",key=f"fb_yes_{prefix}_{i}"):
+                    S.feedback[i]="helpful"; st.toast("피드백 감사합니다!")
+            with c2:
+                if st.button("⚠️ 근거가 맞지 않아요",key=f"fb_no_{prefix}_{i}"):
+                    S.feedback[i]="incorrect"; st.toast("현재 세션에 의견을 기록했어요.")
+            # [UI-C03] 관련 질문은 답변 카드 내부의 마지막, 답변 듣기 아래 위치합니다.
+            if i==last_assistant:
+                st.caption("🔎 이 답변에 이어서 물어보기")
+                cols=st.columns(2)
+                for j,q in enumerate(followups_for(msg.get("question",""))):
+                    with cols[j]:
+                        if st.button(q,key=f"follow_{prefix}_{i}_{j}",use_container_width=True):
+                            submit_question(q)
+                            rerun_after_question(prefix)
 
 
-# [추가 기능/수정 포인트 UI-V1] Streamlit 기본 마이크 녹음 + 3차 프로젝트 Whisper(STT)
 def render_voice_question(prefix):
-    """음성 입력은 문자로 변환한 뒤 사용자가 확인하고 전송하도록 합니다."""
-    with st.expander("🎙️ 음성으로 질문하기", expanded=False):
-        st.caption("마이크 녹음 → 한국어 음성 인식 → 문장 확인·수정 → 백서 RAG 질문")
-        audio = st.audio_input("질문을 녹음해 주세요", key=f"mic_{prefix}")
-        if audio is None:
-            return
-        raw = audio.getvalue()
-        voice_digest = hashlib.sha256(raw).hexdigest()
-        if S.get(f"voice_digest_{prefix}") != voice_digest:
-            S[f"voice_digest_{prefix}"] = voice_digest
-            S[f"voice_edit_{prefix}"] = ""
-            if not get_api_key():
-                st.warning("음성 인식에는 OpenAI API 키가 필요합니다.")
+    with st.expander("🎙️ 음성으로 질문하기",expanded=False):
+        st.caption("녹음 → 한국어 음성 인식 → 문장 확인 후 전송")
+        audio=st.audio_input("질문 녹음",key=f"mic_{prefix}")
+        if audio is None: return
+        raw=audio.getvalue()
+        digest=hashlib.sha256(raw).hexdigest()
+        if S.get(f"voice_digest_{prefix}")!=digest:
+            S[f"voice_digest_{prefix}"]=digest
+            S[f"voice_edit_{prefix}"]=""
+            if not get_api_key(): st.warning("음성 인식에는 API 키가 필요합니다.")
             else:
                 try:
-                    with st.spinner("한국어 음성을 텍스트로 변환하는 중..."):
-                        S[f"voice_edit_{prefix}"] = transcribe_audio(raw, get_api_key())
-                except Exception as exc:
-                    st.error(f"음성 인식 중 오류가 발생했습니다 ({type(exc).__name__}). 다시 녹음해 주세요.")
+                    with st.spinner("음성을 텍스트로 변환하는 중..."):
+                        S[f"voice_edit_{prefix}"]=transcribe_audio(raw,get_api_key(),model=S.stt_model)
+                except Exception as exc: st.error(f"음성 인식 실패 ({type(exc).__name__}).")
         if S.get(f"voice_edit_{prefix}"):
-            st.text_area("인식한 질문 (전송 전 수정 가능)", key=f"voice_edit_{prefix}", height=75)
-            if st.button("이 음성 질문 전송", key=f"voice_send_{prefix}", type="primary"):
-                submit_question(S.get(f"voice_edit_{prefix}", ""))
+            st.text_area("인식한 질문 (수정 가능)",key=f"voice_edit_{prefix}",height=80)
+            if st.button("이 음성 질문 전송",key=f"voice_send_{prefix}",type="primary"):
+                submit_question(S.get(f"voice_edit_{prefix}",""))
                 rerun_after_question(prefix)
 
 
 def export_conversation():
-    """[추가 기능] 개인 대화 기록을 UTF-8 텍스트로 내보냅니다. 서버 DB에는 저장하지 않습니다."""
-    items = ["AIVLE Guide | 나의 학습 질문 기록", ""]
-    for message in S.messages:
-        title = "나" if message["role"] == "user" else "AIVLE Guide"
-        items.extend([f"[{title}]", message["content"], ""])
-        if message["role"] == "assistant" and message.get("sources"):
-            used = message["sources"][:5]
-            items.append("검색 근거: " + " / ".join(
-                f"{x.get('id','D?')} {x['name']} PDF {x.get('page') or '?'}쪽" for x in used))
-            items.append("")
-    return "\n".join(items)
+    rows=["AIVLE Guide | 내 질문 기록",""]
+    for m in S.messages:
+        who="나" if m["role"]=="user" else "AIVLE Guide"
+        content=m["content"] if m["role"]=="user" else tone_render(m["content"])
+        rows.extend([f"[{who}]",content,""])
+        if m["role"]=="assistant" and m.get("sources"):
+            rows.append("검색 근거: " + " / ".join(
+                f"{s.get('id','D?')} {s.get('name','백서')} {s.get('page') or '?'}쪽" for s in m['sources'][:5]))
+            rows.append("")
+    return "\n".join(rows)
 
-def render_questions(prefix, compact=False):
-    # 질문 입력창 옆의 클립 아이콘으로도 문서를 업로드/선택할 수 있습니다.
-    input_col, attach_col = st.columns([9, 1], vertical_alignment="center")
-    with input_col:
-        with st.form(f"form_{prefix}", clear_on_submit=True):
-            field, send_col = st.columns([5, 1], vertical_alignment="center")
-            with field:
-                question = st.text_input("질문", placeholder="에이블스쿨에 대해 질문해 주세요",
-                                         label_visibility="collapsed", key=f"text_{prefix}")
-            with send_col:
-                sent = st.form_submit_button("전송", type="primary", use_container_width=True)
-            if sent and question.strip():
-                submit_question(question)
-                rerun_after_question(prefix)
-    with attach_col:
-        with st.popover("📎", help="백서 PDF 첨부", use_container_width=True):
-            document_upload(f"attach_{prefix}")
+
+def render_recommendations(prefix,compact=False):
+    st.markdown("**✨ 추천 질문**")
+    with st.container(key=f"recs_{prefix}"):
+        cols=st.columns(2)
+        for i,q in enumerate(QUESTIONS[:4] if compact else QUESTIONS):
+            with cols[i%2]:
+                if st.button(q,key=f"rec_{prefix}_{i}",use_container_width=True):
+                    submit_question(q)
+                    rerun_after_question(prefix)
+
+
+def render_chat_input(prefix):
+    with st.form(f"form_{prefix}",clear_on_submit=True):
+        field,send=st.columns([6,1],vertical_alignment="center")
+        with field:
+            question=st.text_input("질문",placeholder="에이블스쿨에 대해 질문해 주세요",
+                                   label_visibility="collapsed",key=f"text_{prefix}")
+        with send: sent=st.form_submit_button("전송",type="primary",use_container_width=True)
+        if sent and question.strip():
+            submit_question(question)
+            rerun_after_question(prefix)
     render_voice_question(prefix)
-    st.caption("✨ 추천 질문")
-    options = QUESTIONS[:4] if compact else QUESTIONS
-    cols = st.columns(2)
-    for j, q in enumerate(options):
-        with cols[j % 2]:
-            if st.button(q, key=f"{prefix}_rec_{j}", use_container_width=True):
-                submit_question(q)
-                rerun_after_question(prefix)
-    if S.messages:
-        st.caption("🔎 관련 후속 질문")
-        for j, q in enumerate(FOLLOW_UP[:2]):
-            if st.button(q, key=f"{prefix}_follow_{j}"):
-                submit_question(q)
-                rerun_after_question(prefix)
 
 
 def render_top_five():
-    top = top_questions()
+    top=top_questions()
     if not top:
-        st.caption("아직 질문 기록이 없어 추천 FAQ를 보여줍니다.")
-        top = [(q, None) for q in QUESTIONS[:5]]
+        st.caption("아직 질문이 없어 추천 FAQ로 대신 표시합니다.")
+        top=[(q,None) for q in QUESTIONS[:5]]
     else:
-        st.caption("현재 앱 서버에 기록된 질문 기준 · 서버 재시작 시 초기화될 수 있음")
-    for i, (question, count) in enumerate(top[:5], 1):
-        st.markdown(f"**{i}. {question}**")
-        if count is not None:
-            st.caption(f"{count}회 질문")
+        st.caption("앱 서버에 기록된 질문 횟수 기준이며 서버 재시작 시 초기화될 수 있습니다.")
+    for i,(q,count) in enumerate(top[:5],1):
+        st.markdown(f"**{i}. {q}**")
+        if count is not None: st.caption(f"{count}회 질문")
 
 
-@st.dialog("💬 AIVLE Guide AI 도우미", width="large")
+def render_chat_size(prefix):
+    left,right=st.columns([3,2],vertical_alignment="center")
+    with left: st.caption(f"대화 영역 높이: {S.chat_height}px")
+    with right:
+        less,more=st.columns(2)
+        with less:
+            if st.button("－ 줄이기",key=f"shrink_{prefix}",use_container_width=True):
+                S.chat_height=max(240,int(S.chat_height)-120); rerun_after_question(prefix)
+        with more:
+            if st.button("＋ 늘리기",key=f"grow_{prefix}",use_container_width=True):
+                S.chat_height=min(960,int(S.chat_height)+120); rerun_after_question(prefix)
+
+
+@st.dialog("💬 AIVLE Guide AI 도우미",width="large")
 def chatbot_dialog():
-    st.caption("통합 백서 PDF에 근거하는 질문·답변 · 큰 화면은 '전체 화면 열기'")
-    with st.expander("📄 학습 백서 업로드 / 자료 변경", expanded=False):
-        document_upload("dialog")
-    with st.container(height=280, border=True):
-        render_message_history()
-    render_questions("popup", compact=True)
-    with st.expander("🔥 많이 묻는 질문 TOP 5"):
-        render_top_five()
-    c1,c2 = st.columns(2)
+    st.caption("백서 근거 중심 AI 도우미 · 문서 업로드는 왼쪽 사이드바에서 진행")
+    render_recommendations("popup",compact=True)
+    render_chat_size("popup")
+    with st.container(height=int(S.chat_height),border=True):
+        render_message_history("popup")
+    render_chat_input("popup")
+    c1,c2=st.columns(2)
     with c1:
-        if st.button("↗ 전체 화면 열기", key="open_full_chat", use_container_width=True):
+        if st.button("↗ 전체 화면 열기",key="dialog_open_full",use_container_width=True):
             navigate("AI에게 질문하기")
     with c2:
-        if st.button("🗑️ 대화 초기화", key="popup_clear", use_container_width=True):
-            S.messages = []
-            S.audio_responses = {}
+        if st.button("🗑️ 대화 초기화",key="dialog_clear",use_container_width=True):
+            S.messages,S.audio_responses=[],{}
             st.rerun()
-
-
-# [셀 06] 사이드바 및 전체 페이지 디자인 | Ctrl+F로 [수정 포인트 ...] 검색
+# [셀 06] 사이드바 / 홈 / 나머지 페이지 / 환경설정 / AI 채팅
+# [UI-P01] AI 메뉴는 최상단 고정, 나머지 목차는 환경설정에서 순서 변경할 수 있습니다.
 with st.sidebar:
-    st.markdown("## 🎓 AIVLE Guide")
-    st.caption("에이블스쿨 학습·정보 길잡이")
+    st.image(LOGO_URL, use_container_width=True)
+    st.caption("AIVLE School 학습 · 정보 길잡이")
     st.divider()
-    for page in MENU:
-        if st.button(f"{MENU_ICON[page]}  {page}", key=f"nav_{page}",
-                     type="primary" if S.page == page else "secondary",
-                     use_container_width=True):
+    with st.container(key="nav_ai"):
+        if st.button("💬 AI에게 질문하기",key="nav_ai_button",use_container_width=True):
+            navigate("AI에게 질문하기")
+    for page in S.menu_order:
+        if page == "AI에게 질문하기": continue
+        if st.button(f"{MENU_ICON[page]}  {page}",key=f"nav_{page}",
+                     type="primary" if S.page==page else "secondary",use_container_width=True):
             navigate(page)
     st.divider()
-    if st.button("💬 AI에게 질문하기", key="nav_chat", use_container_width=True):
-        navigate("AI에게 질문하기")
-    st.caption("지원 · 교육 · 프로젝트 · 진로")
+    # [UI-P02] 유일한 PDF 업로더 위치. 드래그앤드롭 기본 지원.
+    document_upload()
+    st.divider()
+    # [UI-P03] 인기 질문은 ☰ 메뉴 버튼을 누를 때만 펼쳐지는 사이드바 팝오버로 이동.
+    with st.popover("☰ 많이 묻는 질문 TOP 5",use_container_width=True):
+        render_top_five()
     st.markdown("[KT AIVLE School 공식 홈페이지](https://aivle.kt.co.kr/)")
 
 if S.page == "홈":
     st.markdown("""<div class="hero"><small>KT AIVLE SCHOOL</small>
       <h1>AI와 DX, 내일의 가능성을 만나다</h1>
       <p>KT AIVLE School은 AI·데이터·클라우드를 활용해 실제 기업의 문제를 해결하는 경험을 쌓는
-      실무형 인재양성 프로그램입니다. 기초 학습부터 미니프로젝트, 빅프로젝트, 진로 준비까지 이어집니다.</p>
-      </div>""", unsafe_allow_html=True)
-    a,b,c = st.columns(3)
-    with a:
-        if st.button("🎓 교육과정 안내", use_container_width=True): navigate("에이블스쿨이란?")
-    with b:
-        if st.button("📚 나만의 학습전략", use_container_width=True): navigate("학습전략")
-    with c:
-        if st.button("💬 AI 도우미 시작", type="primary", use_container_width=True): navigate("AI에게 질문하기")
+      실무형 인재양성 프로그램입니다. 기초 학습부터 프로젝트, 진로 준비까지 이어집니다.</p>
+      </div>""",unsafe_allow_html=True)
+    c1,c2,c3=st.columns(3)
+    with c1:
+        if st.button("🎓 교육과정 안내",use_container_width=True): navigate("에이블스쿨이란?")
+    with c2:
+        if st.button("📚 나만의 학습전략",use_container_width=True): navigate("학습전략")
+    with c3:
+        if st.button("💬 AI 도우미 시작",type="primary",use_container_width=True): navigate("AI에게 질문하기")
     st.write("")
+    st.subheader("🗓️ 나의 학습 계획 시간표")
+    # [UI-P04] 학습전략에서 작성한 목표/스케줄/실행점검을 홈에서 실시간 반영합니다.
+    completed_checks=sum(bool(S.get(f"execute_{i}",False)) for i in range(5))
+    a,b,c=st.columns(3)
+    a.metric("학습 수준",S.level)
+    b.metric("주간 학습 목표",f"{S.weekly_hours}시간")
+    c.metric("실행점검 완료",f"{completed_checks}/5")
+    st.markdown(f"**이번 주 목표:** {html.escape(S.goal)}")
+    last=S.study_logs[-1] if S.study_logs else None
+    if last:
+        st.caption(f"마지막 실행 기록 · {last.get('날짜','날짜 미상')} · 실제 {last.get('실제시간',0)}시간 / 목표 {last.get('계획시간',S.weekly_hours)}시간 · 실습 {last.get('실습완료',0)}개")
+    else:
+        st.caption("학습전략 → 실행점검의 기록도 이곳에 표시됩니다. 주간 학습량은 시간표에 등록된 일정으로 계산합니다.")
+    render_schedule("home",editable=True)
+    st.caption("일정과 학습 기록은 현재 세션에 저장됩니다. 환경설정의 JSON 백업/복원으로 다음 접속에도 이어갈 수 있어요.")
+    st.divider()
     st.subheader("에이블스쿨의 주요 학습 경험")
-    a,b,c = st.columns(3)
-    for col, head, desc in [
-        (a,"🌐 온라인 중심 실습", "강의·실습 플랫폼에서 기초 개념을 익히고 직접 적용합니다."),
-        (b,"🧑‍🏫 현직 전문가 피드백", "기업 실무 관점의 코칭과 발표 피드백으로 결과물을 다듬습니다."),
-        (c,"🛠️ 팀 기반 프로젝트", "문제 정의에서 분석·구현·제안까지 협업을 경험합니다.")
+    a,b,c=st.columns(3)
+    for col,head,desc in [
+        (a,"🌐 온라인 중심 실습","강의·실습 플랫폼에서 기초 개념을 익히고 적용합니다."),
+        (b,"🧑‍🏫 현직 전문가 피드백","기업 실무 관점의 코칭과 발표 피드백을 반영합니다."),
+        (c,"🛠️ 팀 기반 프로젝트","문제 정의에서 분석·구현·제안까지 협업합니다."),
     ]:
         with col:
-            st.markdown(f'<div class="panel"><strong>{head}</strong><p>{desc}</p></div>', unsafe_allow_html=True)
-    st.write("")
-    left,right = st.columns([1,1], gap="large")
-    with left:
-        st.subheader("📢 주요 안내")
-        st.info("현재 공지 영역은 안내 예시입니다. 모집·교육 일정은 반드시 해당 기수의 공식 공지를 확인하세요.")
-        st.markdown("- **모집:** 지원 자격·모집 일정 확인\n- **교육:** 운영 공지·교육 자료 확인\n- **프로젝트:** 과제별 제출 기한·형식 확인")
-        if st.button("공지사항 메뉴 보기", use_container_width=True): navigate("공지사항")
-    with right:
-        st.subheader("🔥 자주 묻는 질문 TOP 5")
-        render_top_five()
-    st.caption("안내 내용: KT AIVLE School 공식 프로그램 소개·학습 환경을 바탕으로 재구성. 실시간 공지 연동은 미구현.")
+            st.markdown(f'<div class="panel"><strong>{head}</strong><p>{desc}</p></div>',unsafe_allow_html=True)
 
 elif S.page == "에이블스쿨이란?":
     st.title("🎓 에이블스쿨이란?")
@@ -536,7 +769,7 @@ elif S.page == "노하우":
 elif S.page == "학습전략":
     st.title("📚 학습전략 · 나만의 학습 도우미")
     st.caption("통합 백서의 '개인 학습 계획과 실행 점검' 항목을 활용하기 위한 화면 초안입니다. 아래 배분과 체크리스트는 개인 학습 권고안이며 공식 성적·수료 판정과 무관합니다.")
-    pre,plan,check = st.tabs(["① 사전학습", "② 개인 학습계획", "③ 실행점검"])
+    pre,plan,timetable,check = st.tabs(["① 사전학습", "② 개인 학습계획", "③ 시간표 설정", "④ 실행점검"])
     with pre:
         st.subheader("학습 순서 가이드")
         for head,desc in [
@@ -585,6 +818,10 @@ elif S.page == "학습전략":
             st.warning("요일별 계획 합계와 주간 가능 시간이 달라요. 시간을 조정해 주세요.")
         if st.button("📋 내 계획 복사", key="copyplan"):
             st.code(f"학습 수준: {S.level}\n목표: {S.goal}\n주간 권고 학습: {S.weekly_hours}시간\n"+" / ".join(f"{k} {v:g}h" for k,v in days.items()), language="text")
+    with timetable:
+        st.subheader("🗓️ 나의 날짜·시간별 학습 일정")
+        st.caption("홈과 연결된 같은 시간표입니다. 여기서 변경하면 홈에도 즉시 반영됩니다.")
+        render_schedule("strategy",editable=True)
     with check:
         st.subheader("실행점검 체크리스트")
         points = ["예제를 혼자 다시 실행할 수 있다", "코드와 결과를 내 말로 설명할 수 있다",
@@ -614,7 +851,7 @@ elif S.page == "학습전략":
             writer.writerows(S.study_logs)
             st.download_button("학습 기록 CSV 다운로드",buffer.getvalue().encode("utf-8-sig"),
                                file_name="aivle_study_log.csv",mime="text/csv")
-        st.caption("체크 결과와 학습 기록은 세션 기반입니다. 새로 접속하면 사라질 수 있으니 CSV로 백업하세요.")
+        st.caption("기록은 세션에 저장됩니다. 환경설정의 JSON 백업으로 시간표·목표·실행기록을 함께 보관할 수 있습니다.")
     if st.button("💬 이 학습 주제로 질문하기", type="primary"):
         navigate("AI에게 질문하기")
 
@@ -640,34 +877,104 @@ elif S.page == "문의":
             st.warning("문의 요점을 먼저 입력해 주세요.")
     st.caption("이 화면은 메시지를 자동 발송하지 않습니다. 운영 담당자의 공식 연락처를 통해 직접 문의해 주세요.")
 
+
+elif S.page == "환경설정":
+    st.title("⚙️ 환경설정")
+    st.caption("답변 근거의 사실 내용은 유지하면서 표시 형식, 말투, 음성, 화면 모드, 메뉴 순서를 조정합니다.")
+    a,b,c=st.tabs(["💬 답변 스타일", "🔊 음성 · 화면", "↕️ 메뉴 · 데이터 백업"])
+    with a:
+        st.subheader("답변 형식")
+        fmt=["간결", "표준", "상세"]
+        S.answer_format=st.selectbox("답변 분량/구성",fmt,index=fmt.index(S.answer_format) if S.answer_format in fmt else 1)
+        st.caption("간결: 핵심 중심 · 표준: 근거와 예외 · 상세: 조건 비교 및 세부 설명")
+        st.subheader("답변 태도")
+        tones=["차분한", "다정한", "엄격한", "자신감을 주는", "격려하는 코치"]
+        S.answer_tone=st.selectbox("말투와 분위기",tones,index=tones.index(S.answer_tone) if S.answer_tone in tones else 0)
+        st.info("말투를 바꿔도 RAG 본문과 출처는 동일하게 유지합니다. 답변 위에 붙는 안내 어조만 바뀌므로 사실관계가 달라지지 않습니다.")
+        st.markdown("**적용 미리보기**")
+        st.markdown(tone_render("백서에서 확인한 사실과 출처를 근거로 답변합니다. [D1]"))
+    with b:
+        st.subheader("음성 답변 설정")
+        models=list(TTS_MODELS)
+        S.tts_model=st.selectbox("음성 합성 모델 (TTS)",models,
+            index=models.index(S.tts_model) if S.tts_model in models else 0)
+        voices=list(ALL_VOICES if S.tts_model=="gpt-4o-mini-tts" else CLASSIC_VOICES)
+        if S.tts_voice not in voices: S.tts_voice="alloy"
+        S.tts_voice=st.selectbox("음성 목소리",voices,index=voices.index(S.tts_voice))
+        S.tts_speed=st.slider("음성 답변 속도 (배속)",min_value=0.5,max_value=2.0,
+            value=float(S.tts_speed),step=0.1)
+        S.stt_model=st.selectbox("음성 질문 인식 모델 (STT)",list(STT_MODELS),
+            index=list(STT_MODELS).index(S.stt_model) if S.stt_model in STT_MODELS else 0)
+        st.caption("음성 답변은 '🔊 답변 듣기'를 클릭할 때만 생성됩니다. 설정 변경 후 새로 듣기를 누르면 변경한 속도·목소리로 생성합니다.")
+        st.caption("현재 음성 합성 API 모델은 향후 변경될 수 있으므로 장기 배포 시 공식 API 문서를 확인하세요.")
+        st.divider()
+        st.subheader("화면 모드")
+        theme=["시스템","라이트","다크"]
+        chosen=st.radio("테마",theme,index=theme.index(S.theme_mode) if S.theme_mode in theme else 0,horizontal=True)
+        if chosen!=S.theme_mode:
+            S.theme_mode=chosen
+            st.rerun()
+        st.caption("시스템 모드는 사용자의 브라우저/운영체제 다크모드 선호 설정을 따릅니다. 기본 Streamlit 컴포넌트의 내부 스타일은 배포 환경에 따라 일부 다를 수 있습니다.")
+    with c:
+        st.subheader("사이드바 목차 순서")
+        st.caption("요청에 따라 'AI에게 질문하기'는 항상 첫 번째로 고정합니다. 나머지 메뉴는 위/아래 버튼으로 이동할 수 있습니다.")
+        menu=[x for x in S.menu_order if x!="AI에게 질문하기"]
+        selected=st.selectbox("이동할 메뉴",menu,key="menu_reorder_choice")
+        col1,col2,col3=st.columns(3)
+        with col1: up=st.button("↑ 위로",use_container_width=True)
+        with col2: down=st.button("↓ 아래로",use_container_width=True)
+        with col3: reset=st.button("기본 순서",use_container_width=True)
+        if reset:
+            S.menu_order=list(DEFAULT_MENU); st.rerun()
+        if up or down:
+            idx=menu.index(selected)
+            target=idx+(-1 if up else 1)
+            if 0<=target<len(menu):
+                menu[idx],menu[target]=menu[target],menu[idx]
+                S.menu_order=["AI에게 질문하기"]+menu
+                st.rerun()
+        st.markdown("**현재 순서**")
+        st.write("  →  ".join(f"{i+1}. {x}" for i,x in enumerate(S.menu_order)))
+        st.divider()
+        st.subheader("나의 학습 계획 · 설정 백업")
+        st.caption("시간표/개인 목표/실행기록/환경설정만 저장합니다. PDF, 질문 대화, API 키는 백업에 포함되지 않습니다.")
+        st.download_button("📦 JSON 백업 저장",data=safe_backup(),
+            file_name="aivle_my_study_backup.json",mime="application/json",use_container_width=True)
+        restore_file=st.file_uploader("이전에 저장한 JSON 백업 불러오기",type=["json"],key="study_backup_upload")
+        if restore_file is not None and st.button("백업 내용 복원",type="primary"):
+            try:
+                restore_backup(restore_file.getvalue())
+                st.success("개인 계획과 설정을 불러왔습니다.")
+                st.rerun()
+            except Exception as exc:
+                st.error(f"백업 파일을 확인해 주세요 ({type(exc).__name__}).")
+
 elif S.page == "AI에게 질문하기":
     st.title("💬 AI에게 질문하기")
-    st.caption("PDF 업로드 → 자동 청킹·임베딩·Chroma 검색 → 백서 근거 기반 답변")
-    st.info("📄 백서 PDF를 등록하고 질문해 보세요. 답변은 문서의 근거를 찾아 작성하며, "
-            "각 답변에서 출처·PDF 페이지를 확인할 수 있습니다.")
-    with st.expander("📎 학습 백서 업로드 / 답변 자료 선택", expanded=S.pdf_bytes is None):
-        document_upload("full")
-    a,b = st.columns([3,1],gap="large")
-    with a:
-        with st.container(height=380,border=True):
-            render_message_history()
-        render_questions("full",compact=False)
+    name,_=active_document()
+    st.caption("백서 근거 기반 RAG 질의응답 · PDF 변경/업로드는 왼쪽 사이드바에서만 가능합니다.")
+    st.info(f"현재 백서: {name}" if name else "📄 왼쪽 사이드바에서 백서 PDF를 드래그해 업로드해 주세요.")
+    # [UI-P05] 추천 질문을 채팅보다 위에 배치했습니다.
+    render_recommendations("full",compact=False)
+    st.divider()
+    # [UI-P06] 채팅 높이 +/- 조절; 사이드바 TOP5 외 오른쪽 FAQ 패널 제거.
+    render_chat_size("full")
+    with st.container(height=int(S.chat_height),border=True):
+        render_message_history("full")
+    render_chat_input("full")
+    col1,col2=st.columns(2)
+    with col1:
         if S.messages:
-            st.download_button("📥 대화 기록 TXT 저장", export_conversation().encode("utf-8-sig"),
-                               file_name="aivle_guide_conversation.txt", mime="text/plain",
-                               key="save_chat", use_container_width=True)
-        if st.button("🗑️ 대화 초기화",key="full_clear"):
-            S.messages = []
-            S.audio_responses = {}
+            st.download_button("📥 대화 기록 TXT 저장",export_conversation().encode("utf-8-sig"),
+                file_name="aivle_guide_conversation.txt",mime="text/plain",use_container_width=True)
+    with col2:
+        if st.button("🗑️ 대화 초기화",key="full_clear",use_container_width=True):
+            S.messages,S.audio_responses=[],{}
             st.rerun()
-    with b:
-        st.subheader("🔥 많이 묻는 질문 TOP 5")
-        render_top_five()
-        st.divider()
-        st.caption("답변의 근거는 검색된 문서의 PDF 페이지 및 근거 문장으로 표시됩니다. 표준 항목명 정보가 없는 PDF는 '본문'으로 표시합니다.")
+    st.caption("근거 보기는 PDF 페이지와 원문 구역을 표시합니다. 중요 운영 규정은 원문과 담당자 안내로 최종 확인하세요.")
 
-# 모든 일반 페이지에 이모지 전용 플로팅 버튼 유지. 내비게이션 위젯 상태 수정 없음.
-if S.page != "AI에게 질문하기":
+# 일반 페이지에서만 큰 플로팅 버튼 활성화
+if S.page!="AI에게 질문하기":
     with st.container(key="chat_float"):
-        if st.button("💬", key="float_chat_button", help="AI 도우미 열기"):
+        if st.button("💬",key="float_chat_button",help="AI 도우미 열기"):
             chatbot_dialog()
