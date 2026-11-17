@@ -549,8 +549,9 @@ def render_schedule(prefix, editable=True):
     if S.get(key_view) != S.calendar_view:
         S[key_view] = S.calendar_view
     def view_changed():
-        S.calendar_view = S[key_view]
-    st.segmented_control("시간표 보기", options, key=key_view, on_change=view_changed, required=True)
+        # Streamlit 버전에 따라 선택된 항목을 다시 누르면 None이 될 수 있어 월을 기본값으로 복원합니다.
+        S.calendar_view = S.get(key_view) or "월"
+    st.segmented_control("시간표 보기", options, key=key_view, on_change=view_changed)
     view = S.calendar_view
     nav_a, nav_b, nav_c, picker = st.columns([1, 1, 1, 3], vertical_alignment="bottom")
     with nav_a:
@@ -569,7 +570,7 @@ def render_schedule(prefix, editable=True):
     def changed_date():
         S.calendar_anchor = S[date_key]
     with picker:
-        st.date_input("기준 날짜", key=date_key, on_change=changed_date, required=True)
+        st.date_input("기준 날짜", key=date_key, on_change=changed_date)
     anchor = S.calendar_anchor
     if view == "월":
         first = month_start(anchor)
@@ -612,7 +613,7 @@ def render_schedule(prefix, editable=True):
     with st.expander("＋ 학습 일정 등록", expanded=False):
         with st.form(f"{prefix}_add", clear_on_submit=True):
             col1, col2, col3 = st.columns(3)
-            with col1: chosen_date = st.date_input("학습 날짜", value=anchor, key=f"{prefix}_add_date", required=True)
+            with col1: chosen_date = st.date_input("학습 날짜", value=anchor, key=f"{prefix}_add_date")
             with col2: start = st.time_input("시작", value=time(19, 0), step=900, key=f"{prefix}_add_start")
             with col3: end = st.time_input("종료", value=time(20, 0), step=900, key=f"{prefix}_add_end")
             title = st.text_input("학습 내용", placeholder="예: RAG 청킹 원리 복습", max_chars=150, key=f"{prefix}_add_title")
@@ -639,7 +640,7 @@ def render_schedule(prefix, editable=True):
             event_key = selected["id"]
             with st.form(f"{prefix}_edit_{event_key}"):
                 col1,col2,col3 = st.columns(3)
-                with col1: edit_date = st.date_input("날짜", value=date.fromisoformat(selected["date"]), key=f"{prefix}_date_{event_key}", required=True)
+                with col1: edit_date = st.date_input("날짜", value=date.fromisoformat(selected["date"]), key=f"{prefix}_date_{event_key}")
                 with col2: edit_start = st.time_input("시작", value=time.fromisoformat(selected["start"]), key=f"{prefix}_start_{event_key}")
                 with col3: edit_end = st.time_input("종료", value=time.fromisoformat(selected["end"]), key=f"{prefix}_end_{event_key}")
                 edit_title = st.text_input("내용", value=selected["title"], key=f"{prefix}_title_{event_key}")
