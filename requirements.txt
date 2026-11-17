@@ -1,9 +1,6 @@
-# [셀 07] 패키지 버전 — Streamlit Cloud가 자동 설치
-streamlit==1.66.1
-openai==3.16.2
-langchain-core==1.6.3
-langchain-openai==1.6.2
-langchain-text-splitters==1.1.2
-langchain-chroma==1.1.0
-chromadb==1.5.9
-langchain-pymupdf4llm==1.28.0
+streamlit>=1.46,<2
+langchain-openai>=1.0,<2
+langchain-chroma>=1.0,<2
+langchain-community>=0.4,<1
+langchain-text-splitters>=1.0,<2
+pymupdf>=1.25,<2
