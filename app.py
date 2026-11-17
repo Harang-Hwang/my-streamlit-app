@@ -177,7 +177,74 @@ def get_api_key():
     except Exception: return ""
 # [셀 04] PDF 선택 / RAG 연결 / 학습계획·시간표 공통 로직
 from rag_core import rag_pipeline
-from voice_core import transcribe_audio, synthesize_answer, TTS_MODELS, ALL_VOICES, CLASSIC_VOICES, STT_MODELS
+
+# [HOTFIX 01] 음성 기능을 app.py 안에 정의합니다.
+# GitHub의 voice_core.py가 누락되거나 이전 버전이어도 앱 시작 단계에서 ImportError가 발생하지 않습니다.
+# OpenAI SDK도 음성 버튼을 누를 때만 불러옵니다. (API 키는 Streamlit Secrets에서 사용)
+STT_MODELS = ("whisper-1", "gpt-4o-mini-transcribe")
+TTS_MODELS = ("gpt-4o-mini-tts", "tts-1", "tts-1-hd")
+ALL_VOICES = ("marin", "cedar", "alloy", "ash", "ballad", "coral", "echo", "fable",
+              "nova", "onyx", "sage", "shimmer", "verse")
+CLASSIC_VOICES = ("alloy", "ash", "coral", "echo", "fable", "onyx", "nova", "sage", "shimmer")
+MAX_SPEECH_LENGTH = 3000
+
+
+def _voice_client(api_key, timeout=60):
+    try:
+        from openai import OpenAI
+    except ImportError as exc:
+        raise RuntimeError(
+            "OpenAI 음성 SDK를 불러오지 못했습니다. "
+            "requirements.txt에 openai가 포함되어 있는지 확인하고 앱을 다시 배포해 주세요."
+        ) from exc
+    return OpenAI(api_key=api_key, timeout=timeout)
+
+
+def transcribe_audio(audio_bytes, api_key, model="whisper-1"):
+    """STT. 음성 기능을 사용할 때만 OpenAI를 불러옵니다."""
+    if not audio_bytes:
+        raise ValueError("녹음된 음성이 없습니다.")
+    if model not in STT_MODELS:
+        raise ValueError("지원하지 않는 음성 인식 모델입니다.")
+    buffer = io.BytesIO(audio_bytes)
+    buffer.name = "aivle_question.wav"
+    response = _voice_client(api_key, 45).audio.transcriptions.create(
+        model=model, file=buffer, language="ko"
+    )
+    return (response.text or "").strip()
+
+
+def _clean_speech_text(text):
+    text = re.sub(r"\[([^\]]+)\]\(https?://[^)]+\)", r"\1", str(text))
+    text = re.sub(r"\[(?:D\d+|[PEORTB]\d{2})\]", "", text)
+    text = re.sub(r"[*_`#]", "", text)
+    text = re.sub(r"(?m)^\s*[-•]\s*", "", text)
+    return " ".join(text.split()).strip()[:MAX_SPEECH_LENGTH]
+
+
+def synthesize_answer(text, api_key, model="gpt-4o-mini-tts", voice="marin", speed=1.0):
+    """TTS. 답변 텍스트는 그대로 두고 음성 합성만 수행합니다."""
+    speech_text = _clean_speech_text(text)
+    if not speech_text:
+        raise ValueError("읽을 답변이 없습니다.")
+    if model not in TTS_MODELS:
+        raise ValueError("지원하지 않는 음성 합성 모델입니다.")
+    voices = ALL_VOICES if model == "gpt-4o-mini-tts" else CLASSIC_VOICES
+    if voice not in voices:
+        raise ValueError("선택한 모델에서 지원하지 않는 목소리입니다.")
+    speed = float(speed)
+    if not 0.25 <= speed <= 4.0:
+        raise ValueError("속도는 0.25~4.0 사이여야 합니다.")
+    kwargs = dict(model=model, voice=voice, input=speech_text,
+                  response_format="mp3", speed=speed)
+    if model == "gpt-4o-mini-tts":
+        kwargs["instructions"] = (
+            "한국어 문장을 또렷하고 자연스럽게 읽으세요. "
+            "원문에 없는 사실이나 인사말, 웃음소리를 덧붙이지 마세요."
+        )
+    response = _voice_client(api_key).audio.speech.create(**kwargs)
+    return response.content
+
 
 @st.cache_resource(show_spinner="백서 검색 인덱스를 만드는 중...", max_entries=4)
 def build_retriever(file_bytes, file_hash, api_key, document_name):
