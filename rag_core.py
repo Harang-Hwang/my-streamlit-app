@@ -404,7 +404,7 @@ class AivleRag:
                 break
         return unique
 
-    def ask(self, question, search_query=None):
+    def ask(self, question, search_query=None, answer_format="표준"):
         """백서 검색 → LLM 응답 → 잘못된 출처 번호 제거 → 표시 가능한 근거 반환."""
         question = question.strip()
         if not question:
@@ -413,10 +413,19 @@ class AivleRag:
         if not evidence:
             return RagResult("백서에서 관련 근거를 확인하지 못했습니다. 운영 담당자나 공식 공지를 확인해 주세요.", [])
         context = format_docs(evidence)
+        # 출력 형식만 조정합니다. 사실 검증 규칙/근거 검색은 그대로 고정합니다.
+        format_rules = {
+            "간결": "핵심 답을 먼저 제시하고 1~2개 짧은 문단으로 간결하게 설명합니다. 모든 필수 조건과 인용은 유지합니다.",
+            "표준": "핵심 답, 근거, 중요한 예외를 이해하기 좋은 길이로 작성합니다.",
+            "상세": "핵심 답 외에 조건·적용 범위·예외를 자세히 설명하고 복수 쟁점은 항목으로 나눕니다.",
+        }
+        output_rule = format_rules.get(answer_format, format_rules["표준"])
         # 검색 근거는 system 메시지로 전달
         # 실제 사용자 질문은 human 메시지로 분리
         reply = self.llm.invoke([
-            ("system", SYSTEM_PROMPT.format(context=context, question=question)),
+            ("system", SYSTEM_PROMPT.format(context=context, question=question)
+             + "\n[답변 형식 설정] " + output_rule
+             + "\n말투/감정 변화는 UI에서만 처리합니다. 이 설정은 근거와 사실을 바꾸지 않습니다."),
             ("human", question),
         ])
         answer = str(reply.content or "").strip() or "답변을 생성하지 못했습니다. 다시 시도해 주세요."
