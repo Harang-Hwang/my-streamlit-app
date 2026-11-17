@@ -214,7 +214,15 @@ st.markdown("<style>" + vars_css + """
 .guide-month td .day-task {display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;
  overflow:hidden;overflow-wrap:anywhere;font-size:12px;font-weight:650;margin-top:4px;
  color:inherit!important;line-height:1.35;}
-.guide-month td .day-more {font-size:11px;font-weight:600;color:inherit!important;opacity:.85;}
+.guide-month td .day-more {font-size:11px;font-weight:600;color:inherit!important;opacity:.85;} 
+/* 8시간 이상: 날짜와 일정명을 흰색으로 표시 */
+.guide-month td.dark-study,
+.guide-month td.dark-study .day-num,
+.guide-month td.dark-study .day-task,
+.guide-month td.dark-study .day-more {
+    color: #FFFFFF !important;
+}
+
 .guide-heatmap td .guide-task-title {display:-webkit-box;-webkit-line-clamp:2;
  -webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere;
  font-size:11px!important;line-height:1.25!important;padding:3px 5px;text-align:left;}
@@ -573,6 +581,8 @@ def month_heatmap_html(anchor, events):
             color = "#FFFFFF" if level >= 3 else "#173D32"
 
             classes = ("other-month " if day.month != month else "") + ("today-cell" if day == today else "")
+            if level == 5:
+              classes += " dark-study"
             plan_count = sum(e.get("status") != "완료" for e in day_events)
             tooltip = (f"{day:%Y-%m-%d} / 완료 {fmt_hours(minutes)} / "
                        f"계획 {plan_count}건")
