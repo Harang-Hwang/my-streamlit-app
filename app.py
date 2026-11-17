@@ -66,7 +66,15 @@ else:
 st.markdown("<style>" + vars_css + """
 /* 공통: 여백을 충분히 확보하고 카드·제목·선 두께를 통일 */
 .stApp, [data-testid="stAppViewContainer"] {background:var(--guide-bg)!important;color:var(--guide-text)!important;}
-[data-testid="stMainBlockContainer"] {max-width:1220px!important;padding-top:1.7rem!important;padding-bottom:3rem!important;}
+[data-testid="stMainBlockContainer"] {
+    max-width: 1220px !important;
+    padding-top: 4rem !important;
+    padding-bottom: 3rem !important;
+}
+
+.hero {
+    margin-top: 12px !important;
+}
 [data-testid="stSidebar"] {background:var(--guide-side)!important;color:var(--guide-text)!important;}
 .stApp h1,.stApp h2,.stApp h3,.stApp p,.stApp li,.stApp label,
 .stApp [data-testid="stMarkdownContainer"] {color:var(--guide-text);}
