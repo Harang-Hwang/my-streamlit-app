@@ -3,6 +3,7 @@ UI prototype works without OpenAI API key. Full Q&A requires configured key and 
 """
 import csv
 import hashlib
+import re
 import io
 import os
 import sqlite3
