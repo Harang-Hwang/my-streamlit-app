@@ -66,15 +66,7 @@ else:
 st.markdown("<style>" + vars_css + """
 /* 공통: 여백을 충분히 확보하고 카드·제목·선 두께를 통일 */
 .stApp, [data-testid="stAppViewContainer"] {background:var(--guide-bg)!important;color:var(--guide-text)!important;}
-[data-testid="stMainBlockContainer"] {
-    max-width: 1220px !important;
-    padding-top: 4rem !important;
-    padding-bottom: 3rem !important;
-}
-
-.hero {
-    margin-top: 12px !important;
-}
+[data-testid="stMainBlockContainer"] {max-width:1220px!important;padding-top:1.7rem!important;padding-bottom:3rem!important;}
 [data-testid="stSidebar"] {background:var(--guide-side)!important;color:var(--guide-text)!important;}
 .stApp h1,.stApp h2,.stApp h3,.stApp p,.stApp li,.stApp label,
 .stApp [data-testid="stMarkdownContainer"] {color:var(--guide-text);}
@@ -133,12 +125,37 @@ st.markdown("<style>" + vars_css + """
  background:var(--guide-lightbtn)!important;color:var(--guide-text)!important;
  border:1px solid var(--guide-border)!important;box-shadow:none!important;outline:0!important;}
 .st-key-recs_full button:hover,.st-key-recs_popup button:hover {transform:scale(1.012);}
-/* 플로팅 버튼: 작아진 원형, 이모지 대신 가독성 높은 AI 표기 */
-.st-key-chat_float {position:fixed;right:25px;bottom:25px;z-index:9998;width:64px;}
+/* 일정 저장 및 AI 채팅 전송: Streamlit primaryFormSubmit 포함, 항상 흰 글씨 */
+.stApp [data-testid="stFormSubmitButton"] button[kind="primary"],
+.stApp [data-testid="stFormSubmitButton"] button[kind="primaryFormSubmit"],
+.stApp [data-testid="stFormSubmitButton"] button[data-testid="stBaseButton-primaryFormSubmit"],
+.stApp [data-testid="stFormSubmitButton"] button[kind="primary"]:is(:hover,:focus,:active),
+.stApp [data-testid="stFormSubmitButton"] button[kind="primaryFormSubmit"]:is(:hover,:focus,:active),
+.stApp [data-testid="stFormSubmitButton"] button[data-testid="stBaseButton-primaryFormSubmit"]:is(:hover,:focus,:active) {
+ background:#146F58!important;border:1px solid #146F58!important;
+ color:#FFFFFF!important;-webkit-text-fill-color:#FFFFFF!important;
+ transition:transform .16s ease,box-shadow .16s ease!important;
+}
+.stApp [data-testid="stFormSubmitButton"] button[kind="primary"]:hover,
+.stApp [data-testid="stFormSubmitButton"] button[kind="primaryFormSubmit"]:hover,
+.stApp [data-testid="stFormSubmitButton"] button[data-testid="stBaseButton-primaryFormSubmit"]:hover {
+ transform:scale(1.018)!important;box-shadow:0 3px 11px rgba(7,84,61,.14)!important;
+}
+.stApp [data-testid="stFormSubmitButton"] button:is([kind="primary"],[kind="primaryFormSubmit"],[data-testid="stBaseButton-primaryFormSubmit"]) :is(p,span,div),
+.stApp [data-testid="stFormSubmitButton"] button:is([kind="primary"],[kind="primaryFormSubmit"],[data-testid="stBaseButton-primaryFormSubmit"]):is(:hover,:focus,:active) :is(p,span,div) {
+ color:#FFFFFF!important;-webkit-text-fill-color:#FFFFFF!important;
+}
+/* 비활성 전송 버튼에도 흰 글씨 유지 */
+.stApp [data-testid="stFormSubmitButton"] button[kind="primaryFormSubmit"]:disabled,
+.stApp [data-testid="stFormSubmitButton"] button[kind="primaryFormSubmit"]:disabled * {
+ color:#FFFFFF!important;-webkit-text-fill-color:#FFFFFF!important;
+}
+/* 플로팅 AI 버튼: 조금 더 작게, 위로 이동, 글자는 더 크게 */
+.st-key-chat_float {position:fixed;right:25px;bottom:37px;z-index:9998;width:56px;}
 .st-key-chat_float button,.st-key-chat_float button:hover,.st-key-chat_float button:focus {
- width:64px!important;height:64px!important;min-height:64px!important;
+ width:56px!important;height:56px!important;min-height:56px!important;
  border:0!important;border-radius:50%!important;background:#146F58!important;
- color:#FFFFFF!important;font-size:23px!important;font-weight:850!important;letter-spacing:-.03em;
+ color:#FFFFFF!important;font-size:28px!important;font-weight:850!important;letter-spacing:-.03em;
  line-height:1!important;padding:0!important;box-shadow:0 5px 16px rgba(16,58,44,.19)!important;}
 .st-key-chat_float button * {color:#FFFFFF!important;}
 .st-key-chat_float button:hover {transform:scale(1.05)!important;}
@@ -903,7 +920,7 @@ def chatbot_dialog():
 # [셀 06] 사이드바 / 홈 / 나머지 페이지 / 환경설정 / AI 채팅
 # [UI-P01] AI 메뉴는 최상단 고정, 나머지 목차는 환경설정에서 순서 변경할 수 있습니다.
 with st.sidebar:
-    st.image(LOGO_URL, use_container_width=True)
+    st.image(LOGO_URL, width=175)
     st.caption("AIVLE School 학습 · 정보 길잡이")
     st.divider()
     with st.container(key="nav_ai"):
