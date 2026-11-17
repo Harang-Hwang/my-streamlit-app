@@ -1,5 +1,6 @@
 # [셀 03] 공통 UI, 디자인, 사용자 설정, 질문 데이터
-"""AIVLE Guide 3차 통합본 — 2차 기능 보존 및 UI 고도화."""
+"""AIVLE Guide 3차 추가수정본 — 간결한 UI와 월·주·일 학습 캘린더."""
+import calendar
 import csv
 import hashlib
 import html
@@ -33,7 +34,7 @@ DEFAULTS = {
     "weekly_hours": 8, "level": "기초", "goal": "Python·데이터 분석 기초 익히기",
     "days": {"월":1.0,"화":1.0,"수":1.0,"목":1.0,"금":1.0,"토":2.0,"일":1.0},
     "study_checks": {}, "study_logs": [], "study_events": [],
-    "calendar_anchor": today_kst(), "audio_responses": {},
+    "calendar_anchor": today_kst(), "calendar_view": "월", "audio_responses": {},
     "answer_format": "표준", "answer_tone": "차분한", "tts_model": "gpt-4o-mini-tts",
     "tts_voice": "marin", "tts_speed": 1.0, "stt_model": "whisper-1",
     "theme_mode": "시스템", "menu_order": list(DEFAULT_MENU), "chat_height": 500,
@@ -63,73 +64,111 @@ else:
                 f"@media (prefers-color-scheme:dark) {{:root {{{css_vars(DARK)}}}}}")
 
 st.markdown("<style>" + vars_css + """
+/* 공통: 여백을 충분히 확보하고 카드·제목·선 두께를 통일 */
 .stApp, [data-testid="stAppViewContainer"] {background:var(--guide-bg)!important;color:var(--guide-text)!important;}
+[data-testid="stMainBlockContainer"] {max-width:1220px!important;padding-top:1.7rem!important;padding-bottom:3rem!important;}
 [data-testid="stSidebar"] {background:var(--guide-side)!important;color:var(--guide-text)!important;}
 .stApp h1,.stApp h2,.stApp h3,.stApp p,.stApp li,.stApp label,
 .stApp [data-testid="stMarkdownContainer"] {color:var(--guide-text);}
+.stApp h1 {letter-spacing:-.035em;}
 .stApp [data-testid="stCaptionContainer"] {color:var(--guide-sub)!important;}
 .stApp [data-testid="stVerticalBlockBorderWrapper"] > div,
 .stApp [data-testid="stExpander"],.stApp [data-testid="stChatMessage"] {
-  border-color:var(--guide-border)!important;}
+ border-color:var(--guide-border)!important;}
 .stApp input,.stApp textarea,.stApp [data-baseweb="select"] > div {
-  background:var(--guide-surface)!important;color:var(--guide-text)!important;
-  border-color:var(--guide-border)!important;}
-.hero {background:linear-gradient(110deg,var(--guide-hero-a),var(--guide-hero-b));
-  border:1px solid var(--guide-border);border-radius:19px;padding:31px 35px;margin:4px 0 22px;}
-.hero small {color:#40AB8F;letter-spacing:1.5px;font-weight:700;}
-.hero h1 {margin:9px 0;font-size:34px;color:var(--guide-text)!important;}
-.hero p {color:var(--guide-sub)!important;font-size:16px;line-height:1.65;}
-.panel {border:1px solid var(--guide-border);border-radius:15px;
-  background:var(--guide-surface);padding:18px;min-height:116px;}
+ background:var(--guide-surface)!important;color:var(--guide-text)!important;
+ border-color:var(--guide-border)!important;}
+.hero {background:var(--guide-hero-b);border:1px solid var(--guide-border);
+ border-radius:16px;padding:25px 30px;margin:4px 0 18px;}
+.hero small {color:var(--guide-sub);letter-spacing:1.2px;font-weight:700;}
+.hero h1 {margin:7px 0;font-size:30px;color:var(--guide-text)!important;}
+.hero p {color:var(--guide-sub)!important;font-size:15px;line-height:1.65;margin:0;}
+.panel {border:1px solid var(--guide-border);border-radius:12px;
+ background:var(--guide-surface);padding:17px;min-height:110px;}
 .panel strong {color:var(--guide-text);}
+.panel p {font-size:14px;line-height:1.55;margin:9px 0 0;}
 .muted {font-size:13px;color:var(--guide-sub);}
-/* [UI-S02] 사이드바의 AI 메뉴를 고유 색으로 고정하고 다른 메뉴와 구별합니다. */
+/* 주요 버튼: 글자 항상 흰색, Hover 색 반전 없이 살짝 확대 */
+.stApp button[kind="primary"],.stApp button[data-testid="stBaseButton-primary"] {
+ background:#146F58!important;border:1px solid #146F58!important;color:#FFFFFF!important;
+ transition:transform .16s ease,box-shadow .16s ease!important;}
+.stApp button[kind="primary"] *, .stApp button[data-testid="stBaseButton-primary"] * {
+ color:#FFFFFF!important;}
+.stApp button[kind="primary"]:hover,.stApp button[kind="primary"]:focus,
+.stApp button[kind="primary"]:active,.stApp button[data-testid="stBaseButton-primary"]:hover,
+.stApp button[data-testid="stBaseButton-primary"]:focus,.stApp button[data-testid="stBaseButton-primary"]:active {
+ background:#146F58!important;border-color:#146F58!important;color:#FFFFFF!important;
+ transform:scale(1.018);box-shadow:0 3px 11px rgba(7,84,61,.14)!important;}
+.stApp button[kind="primary"]:hover *, .stApp button[kind="primary"]:focus *,
+.stApp button[kind="primary"]:active * {color:#FFFFFF!important;}
+/* 사이드바: 현재 메뉴와 AI 메뉴를 명확하지만 단정하게 구분 */
 [data-testid="stSidebar"] .stButton button {text-align:left;justify-content:flex-start;
-  background:transparent;border:0;border-radius:9px;box-shadow:none;color:var(--guide-text);
-  font-weight:600;padding:10px 13px;min-height:42px;}
+ background:transparent;border:0;border-radius:9px;box-shadow:none;
+ color:var(--guide-text);font-weight:600;padding:9px 12px;min-height:41px;}
 [data-testid="stSidebar"] .stButton button:hover {background:var(--guide-lightbtn)!important;}
-[data-testid="stSidebar"] .stButton button[kind="primary"]:not(.st-key-nav_ai button) {
-  background:var(--guide-lightbtn)!important;color:var(--guide-text)!important;}
-.st-key-nav_ai button,.st-key-nav_ai button:hover,.st-key-nav_ai button:focus,
-.st-key-nav_ai button:active {background:linear-gradient(105deg,#12765E,#13A68B)!important;
-  color:#FFFFFF!important;font-weight:800!important;border:1px solid #31BBA2!important;
-  box-shadow:0 4px 13px rgba(8,119,88,.22)!important;min-height:52px!important;}
-button[kind="primary"],button[data-testid="stBaseButton-primary"] {
-  background:#17745F!important;border-color:#17745F!important;color:white!important;}
-/* [UI-S03] 추천 버튼의 선택 후 흰색 배경/포커스 표시 방지 */
+[data-testid="stSidebar"] .stButton button[kind="primary"] {background:var(--guide-lightbtn)!important;
+ color:var(--guide-text)!important;border:0!important;transform:none!important;box-shadow:none!important;}
+[data-testid="stSidebar"] .stButton button[kind="primary"] * {color:var(--guide-text)!important;}
+[data-testid="stSidebar"] .st-key-nav_ai button,
+[data-testid="stSidebar"] .st-key-nav_ai button:hover,
+[data-testid="stSidebar"] .st-key-nav_ai button:focus,
+[data-testid="stSidebar"] .st-key-nav_ai button:active {
+ background:#146F58!important;color:#FFFFFF!important;border:1px solid #146F58!important;
+ font-weight:800!important;box-shadow:none!important;min-height:49px!important;}
+[data-testid="stSidebar"] .st-key-nav_ai button * {color:#FFFFFF!important;}
+[data-testid="stSidebar"] .st-key-nav_ai button:hover {transform:scale(1.015)!important;}
+/* 추천질문: 클릭 후에도 같은 연한 색을 유지 */
 .st-key-recs_full button,.st-key-recs_popup button,
 .st-key-recs_full button:focus,.st-key-recs_popup button:focus,
-.st-key-recs_full button:active,.st-key-recs_popup button:active {
-  background:var(--guide-lightbtn)!important;color:var(--guide-text)!important;
-  border:1px solid var(--guide-border)!important;box-shadow:none!important;outline:0!important;}
+.st-key-recs_full button:active,.st-key-recs_popup button:active,
 .st-key-recs_full button:hover,.st-key-recs_popup button:hover {
-  background:var(--guide-hero-a)!important;border-color:#6CAE9A!important;}
-/* [UI-S04] 플로팅 채팅 아이콘 크게 (버튼 88px / 이모지 56px) */
-.st-key-chat_float {position:fixed;right:26px;bottom:38px;z-index:9998;width:88px;}
-.st-key-chat_float button {width:88px!important;height:88px!important;min-height:88px!important;
-  border:0!important;border-radius:50%!important;background:#146D57!important;
-  color:white!important;font-size:56px!important;line-height:1!important;padding:0!important;
-  box-shadow:0 5px 16px rgba(16,58,44,.22)!important;}
-.st-key-chat_float button:hover {background:#115941!important;transform:translateY(-2px);}
-/* [UI-S05] 근거 표시는 제목/원문/근거번호가 모두 동일한 14px */
+ background:var(--guide-lightbtn)!important;color:var(--guide-text)!important;
+ border:1px solid var(--guide-border)!important;box-shadow:none!important;outline:0!important;}
+.st-key-recs_full button:hover,.st-key-recs_popup button:hover {transform:scale(1.012);}
+/* 플로팅 버튼: 작아진 원형, 이모지 대신 가독성 높은 AI 표기 */
+.st-key-chat_float {position:fixed;right:25px;bottom:25px;z-index:9998;width:64px;}
+.st-key-chat_float button,.st-key-chat_float button:hover,.st-key-chat_float button:focus {
+ width:64px!important;height:64px!important;min-height:64px!important;
+ border:0!important;border-radius:50%!important;background:#146F58!important;
+ color:#FFFFFF!important;font-size:23px!important;font-weight:850!important;letter-spacing:-.03em;
+ line-height:1!important;padding:0!important;box-shadow:0 5px 16px rgba(16,58,44,.19)!important;}
+.st-key-chat_float button * {color:#FFFFFF!important;}
+.st-key-chat_float button:hover {transform:scale(1.05)!important;}
+/* 검색 근거: 제목·발췌·번호 동일한 글자 크기 */
 .evidence-card {background:var(--guide-surface);color:var(--guide-text);
-  border:1px solid var(--guide-border);border-radius:9px;margin:7px 0;padding:12px 14px;}
+ border:1px solid var(--guide-border);border-radius:9px;margin:7px 0;padding:12px 14px;}
 .evidence-card p,.evidence-card div,.evidence-card strong {
-  color:var(--guide-text)!important;font-size:14px!important;line-height:1.6!important;}
+ color:var(--guide-text)!important;font-size:14px!important;line-height:1.6!important;}
 .evidence-card .evidence-excerpt {white-space:pre-wrap;overflow-wrap:anywhere;}
-/* [UI-S06] 학습 시간표: 한 시간 내 학습 분량이 클수록 진한 초록 */
-.guide-heatmap-wrap {overflow:auto;max-height:620px;border:1px solid var(--guide-border);
-  border-radius:12px;background:var(--guide-surface);margin:10px 0 16px;}
-.guide-heatmap {border-collapse:separate;border-spacing:2px;width:100%;min-width:660px;
-  color:var(--guide-text);font-size:12px;}
+/* 월 달력: 학습 완료시간이 길수록 진해지는 정돈된 7열 레이아웃 */
+.guide-month-wrap {overflow-x:auto;margin:10px 0 14px;}
+.guide-month {width:100%;min-width:560px;table-layout:fixed;border-spacing:5px;border-collapse:separate;}
+.guide-month th {font-size:13px;font-weight:650;text-align:center;color:var(--guide-sub);
+ padding:6px 0;}
+.guide-month td {vertical-align:top;border-radius:9px;height:82px;padding:10px 10px 8px;
+ border:1px solid var(--guide-border);background:var(--guide-surface);color:var(--guide-text);}
+.guide-month td.other-month {opacity:.37;}
+.guide-month td.today-cell {outline:2px solid #2A9B7D;outline-offset:-2px;}
+.guide-month td .day-num {display:block;font-size:13px;font-weight:750;color:inherit!important;}
+.guide-month td .day-total {display:block;margin-top:13px;font-size:12px;
+ font-weight:650;color:inherit!important;white-space:nowrap;}
+.guide-legend {font-size:12px;color:var(--guide-sub);margin:3px 0 12px;}
+.guide-legend span {display:inline-block;width:13px;height:13px;border-radius:3px;vertical-align:-2px;
+ margin:0 3px 0 9px;border:1px solid var(--guide-border);}
+/* 주/일 시간표: 제목과 실제 시간대만 명료하게 출력 */
+.guide-heatmap-wrap {overflow:auto;max-height:610px;border:1px solid var(--guide-border);
+ border-radius:11px;background:var(--guide-surface);margin:12px 0 14px;}
+.guide-heatmap {border-collapse:separate;border-spacing:3px;width:100%;min-width:560px;
+ color:var(--guide-text);font-size:12px;}
 .guide-heatmap th {background:var(--guide-surface);color:var(--guide-text);position:sticky;
-  top:0;z-index:2;padding:7px 5px;min-width:74px;border-bottom:1px solid var(--guide-border);}
-.guide-heatmap td {height:27px;text-align:center;border-radius:4px;
-  background:var(--guide-soft);color:var(--guide-text);font-size:11px;min-width:70px;}
-.guide-heatmap td span {color:inherit;font-size:11px;font-weight:650;}
+ top:0;z-index:2;padding:7px 5px;min-width:72px;border-bottom:1px solid var(--guide-border);}
+.guide-heatmap td {height:30px;text-align:center;border-radius:5px;background:var(--guide-soft);
+ color:var(--guide-text);font-size:11px;min-width:68px;}
+.guide-heatmap td span {color:inherit!important;font-size:11px;font-weight:650;}
 .guide-heatmap .guide-hour {position:sticky;left:0;z-index:1;background:var(--guide-surface);
-  font-weight:600;color:var(--guide-sub);min-width:68px;padding:4px;}
+ font-weight:600;color:var(--guide-sub);min-width:65px;padding:5px;}
 </style>""", unsafe_allow_html=True)
+
 
 MENU_ICON = {"AI에게 질문하기":"💬", "홈":"🏠", "에이블스쿨이란?":"🎓",
              "공지사항":"📢", "노하우":"💡", "학습전략":"📚", "문의":"✉️", "환경설정":"⚙️"}
@@ -355,9 +394,10 @@ def rerun_after_question(prefix):
     else: st.rerun()
 
 
-# [UI-C01] 주간 시간표: 추가/수정/삭제는 동일한 session_state 리스트에 반영됩니다.
+# [UI-C01] 공통 학습 일정 데이터: 월 → 주 → 일 / 기본값 월, 완료 시간 기준으로 색상 표시
 WEEKDAYS = ["월", "화", "수", "목", "금", "토", "일"]
 CATEGORIES = ["개념 학습", "코드 실습", "복습", "프로젝트 준비", "기타"]
+
 
 def _minutes(hhmm):
     hour, minute = map(int, hhmm.split(":"))
@@ -372,58 +412,207 @@ def week_start(anchor):
     return anchor - timedelta(days=anchor.weekday())
 
 
-def weekly_events(monday):
-    end = monday + timedelta(days=7)
-    return sorted((e for e in S.study_events if monday <= date.fromisoformat(e["date"]) < end),
+def month_start(anchor):
+    return anchor.replace(day=1)
+
+
+def change_month(anchor, offset):
+    """12월→1월과 윤년을 포함해 현재 '일'을 보존하는 월 이동."""
+    number = anchor.year * 12 + anchor.month - 1 + offset
+    year, month_zero = divmod(number, 12)
+    month = month_zero + 1
+    return date(year, month, min(anchor.day, calendar.monthrange(year, month)[1]))
+
+
+def shift_calendar(anchor, view, offset):
+    if view == "월":
+        return change_month(anchor, offset)
+    if view == "주":
+        return anchor + timedelta(days=7 * offset)
+    return anchor + timedelta(days=offset)
+
+
+def events_in_range(start, end):
+    """start 이상 end 미만의 일정을 정렬해 반환."""
+    return sorted((e for e in S.study_events if start <= date.fromisoformat(e["date"]) < end),
                   key=lambda e: (e["date"], e["start"], e["end"]))
 
 
-def heatmap_html(monday, events):
-    heads = "".join(f"<th>{(monday+timedelta(days=d)).strftime('%m/%d')} ({WEEKDAYS[d]})</th>" for d in range(7))
-    rows = [f'<thead><tr><th>시간</th>{heads}</tr></thead><tbody>']
-    for hour in range(24):
-        t0, t1 = hour * 60, (hour + 1) * 60
-        row = [f'<tr><td class="guide-hour">{hour:02d}:00</td>']
-        for d in range(7):
-            day_iso = (monday + timedelta(days=d)).isoformat()
-            blocks = [e for e in events if e["date"] == day_iso
-                      and _minutes(e["start"]) < t1 and _minutes(e["end"]) > t0]
-            used = min(60, sum(max(0, min(t1, _minutes(e["end"])) - max(t0, _minutes(e["start"]))) for e in blocks))
-            strength = used / 60
-            background = f"rgba(19,146,111,{0.15 + 0.78*strength:.3f})" if used else "var(--guide-soft)"
-            title = html.escape(" / ".join(f"{e['start']}~{e['end']} {e['title']} ({e['category']})" for e in blocks), quote=True)
-            label = f"<span>{used}분</span>" if used else ""
-            row.append(f'<td title="{title}" style="background:{background}">{label}</td>')
-        row.append("</tr>")
-        rows.append("".join(row))
+def union_minutes(events):
+    """동일한 시간대에 겹치는 일정은 실제 학습시간에서 중복 집계하지 않습니다."""
+    slots = sorted((_minutes(e["start"]), _minutes(e["end"])) for e in events)
+    if not slots:
+        return 0
+    merged = []
+    for a, b in slots:
+        if merged and a <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], b))
+        else:
+            merged.append((a, b))
+    return sum(b-a for a,b in merged)
+
+
+def completed_minutes(events):
+    """완료로 표시한 학습 시간만 색상과 학습한 총 시간에 반영."""
+    return union_minutes(e for e in events if e.get("status") == "완료")
+
+
+def fmt_hours(minutes):
+    hours = minutes / 60
+    return f"{hours:.1f}시간" if minutes else "0시간"
+
+
+def month_heatmap_html(anchor, events):
+    """월간 달력: 일별 완료 학습시간에 따라 초록 계열 단계별 농도 적용."""
+    year, month = anchor.year, anchor.month
+    month_days = calendar.Calendar(firstweekday=0).monthdatescalendar(year, month)
+    by_date = {}
+    for e in events:
+        by_date.setdefault(e["date"], []).append(e)
+    head = "".join(f"<th>{day}</th>" for day in WEEKDAYS)
+    rows = [f'<thead><tr>{head}</tr></thead><tbody>']
+    today = today_kst()
+    for week in month_days:
+        cells = []
+        for day in week:
+            day_events = by_date.get(day.isoformat(), [])
+            minutes = completed_minutes(day_events)
+            # 완료 기준 0 / 30분 / 1시간 / 2시간 / 3시간 / 4시간 이상
+            level = (0 if minutes == 0 else 1 if minutes < 30 else 2 if minutes < 60
+                     else 3 if minutes < 120 else 4 if minutes < 180 else 5)
+            shades = ["var(--guide-surface)", "rgba(28,141,105,.16)",
+                      "rgba(28,141,105,.29)", "rgba(28,141,105,.44)",
+                      "rgba(20,115,87,.68)", "#12664F"]
+            bg = shades[level]
+            color = "#FFFFFF" if level >= 4 else "var(--guide-text)"
+            classes = ("other-month " if day.month != month else "") + ("today-cell" if day == today else "")
+            plan_count = sum(e.get("status") != "완료" for e in day_events)
+            tooltip = (f"{day:%Y-%m-%d} / 완료 {fmt_hours(minutes)} / "
+                       f"계획 {plan_count}건")
+            if day_events:
+                tooltip += " / " + " · ".join(f"{e['start']}~{e['end']} {e['title']} ({e['status']})" for e in day_events[:5])
+            note = f'<span class="day-total">{fmt_hours(minutes)}</span>' if minutes else ""
+            cells.append(f'<td class="{classes}" title="{html.escape(tooltip, quote=True)}" '
+                         f'style="background:{bg};color:{color}!important">'
+                         f'<span class="day-num">{day.day}</span>{note}</td>')
+        rows.append("<tr>" + "".join(cells) + "</tr>")
     rows.append("</tbody>")
-    return '<div class="guide-heatmap-wrap"><table class="guide-heatmap">' + rows[0] + "".join(rows[1:]) + '</table></div>'
+    legend = ('<div class="guide-legend">완료한 학습시간 · 적음'
+              '<span style="background:rgba(28,141,105,.16)"></span>'
+              '<span style="background:rgba(28,141,105,.29)"></span>'
+              '<span style="background:rgba(28,141,105,.44)"></span>'
+              '<span style="background:rgba(20,115,87,.68)"></span>'
+              '<span style="background:#12664F"></span>많음</div>')
+    return '<div class="guide-month-wrap"><table class="guide-month">' + ''.join(rows) + '</table></div>' + legend
+
+
+def heatmap_html(start, events, days=7):
+    """주/일: 시간대별 완료시간 표시, 계획된 일정은 마우스 오버로 확인."""
+    heads = "".join(f"<th>{(start+timedelta(days=d)):%m/%d} ({WEEKDAYS[(start+timedelta(days=d)).weekday()]})</th>" for d in range(days))
+    rows = [f'<thead><tr><th>시간</th>{heads}</tr></thead><tbody>']
+    if events:
+        low = min(_minutes(e['start']) // 60 for e in events)
+        high = max((_minutes(e['end']) - 1) // 60 for e in events)
+        first_hour, last_hour = max(0, min(8, low)), min(23, max(22, high))
+    else:
+        first_hour, last_hour = 8, 22
+    for hour in range(first_hour, last_hour+1):
+        t0, t1 = hour*60, (hour+1)*60
+        row = [f'<tr><td class="guide-hour">{hour:02d}:00</td>']
+        for d in range(days):
+            iso = (start + timedelta(days=d)).isoformat()
+            blocks = [e for e in events if e['date']==iso
+                      and _minutes(e['start']) < t1 and _minutes(e['end']) > t0]
+            completed = [e for e in blocks if e['status']=="완료"]
+            clipped = []
+            for e in completed:
+                clipped.append({'start':f'{max(t0,_minutes(e["start"]))//60:02d}:{max(t0,_minutes(e["start"]))%60:02d}',
+                                'end':f'{min(t1,_minutes(e["end"]))//60:02d}:{min(t1,_minutes(e["end"]))%60:02d}'})
+            used = min(60, union_minutes(clipped))
+            background = f"rgba(19,135,101,{0.12 + 0.72*used/60:.3f})" if used else "var(--guide-soft)"
+            ink = '#FFFFFF' if used >= 48 else 'var(--guide-text)'
+            tooltip = html.escape(' / '.join(f"{e['start']}~{e['end']} {e['title']} ({e['status']})" for e in blocks),quote=True)
+            label = f'<span>{used}분</span>' if used else ""
+            row.append(f'<td title="{tooltip}" style="background:{background};color:{ink}">{label}</td>')
+        row.append('</tr>')
+        rows.append(''.join(row))
+    rows.append('</tbody>')
+    minimum = 'min-width:560px;' if days==7 else 'min-width:250px;'
+    return '<div class="guide-heatmap-wrap"><table class="guide-heatmap" style="'+minimum+'">' + ''.join(rows) + '</table></div>'
 
 
 def render_schedule(prefix, editable=True):
-    anchor = st.date_input("시간표 확인 날짜", value=S.calendar_anchor, key=f"{prefix}_week_anchor")
-    S.calendar_anchor = anchor
-    monday = week_start(anchor)
-    events = weekly_events(monday)
-    planned = sum(event_minutes(e) for e in events) / 60
-    finished = sum(event_minutes(e) for e in events if e["status"] == "완료") / 60
-    a, b, c = st.columns(3)
-    a.metric("등록 학습시간", f"{planned:.1f}시간")
-    b.metric("완료 표시 시간", f"{finished:.1f}시간")
-    c.metric("요일별 목표 합계", f"{sum(float(x) for x in S.days.values()):.1f}시간")
-    st.caption(f"{monday:%Y-%m-%d} ~ {(monday+timedelta(days=6)):%Y-%m-%d} · 칸이 진할수록 해당 1시간 내 학습 시간이 많습니다 (0~60분). 일정 위에 마우스를 올리면 내용을 볼 수 있어요.")
-    st.markdown(heatmap_html(monday, events), unsafe_allow_html=True)
-    if events:
-        st.dataframe([{"날짜":e["date"],"시간":f'{e["start"]}~{e["end"]}',
-                       "학습 내용":e["title"],"유형":e["category"],"상태":e["status"]} for e in events],
-                     hide_index=True, use_container_width=True)
+    """홈과 학습전략이 같은 S.study_events, 달력 날짜와 보기 모드를 공유합니다."""
+    options = ["월", "주", "일"]
+    key_view = f"{prefix}_schedule_view"
+    # 서로 다른 페이지에서 번갈아 볼 때도 마지막 선택 보기 유지
+    if S.get(key_view) != S.calendar_view:
+        S[key_view] = S.calendar_view
+    def view_changed():
+        S.calendar_view = S[key_view]
+    st.segmented_control("시간표 보기", options, key=key_view, on_change=view_changed, required=True)
+    view = S.calendar_view
+    nav_a, nav_b, nav_c, picker = st.columns([1, 1, 1, 3], vertical_alignment="bottom")
+    with nav_a:
+        prev = st.button("‹ 이전", key=f"{prefix}_previous", use_container_width=True)
+    with nav_b:
+        now = st.button("오늘", key=f"{prefix}_today", use_container_width=True)
+    with nav_c:
+        following = st.button("다음 ›", key=f"{prefix}_next", use_container_width=True)
+    if prev or following:
+        S.calendar_anchor = shift_calendar(S.calendar_anchor, view, -1 if prev else 1)
+    elif now:
+        S.calendar_anchor = today_kst()
+    date_key = f"{prefix}_jump_date"
+    if S.get(date_key) != S.calendar_anchor:
+        S[date_key] = S.calendar_anchor
+    def changed_date():
+        S.calendar_anchor = S[date_key]
+    with picker:
+        st.date_input("기준 날짜", key=date_key, on_change=changed_date, required=True)
+    anchor = S.calendar_anchor
+    if view == "월":
+        first = month_start(anchor)
+        after = change_month(first, 1)
+        events = events_in_range(first, after)
+        title = f"{first:%Y년 %m월}"
+        total = sum(completed_minutes([e for e in events if e['date']==d.isoformat()])
+                    for d in (first+timedelta(days=i) for i in range((after-first).days)))
+        distinct = len({e['date'] for e in events if e['status']=="완료"})
+        st.markdown(f"**{title}**")
+        a,b,c = st.columns(3)
+        a.metric("완료한 학습", fmt_hours(total))
+        b.metric("공부한 날짜", f"{distinct}일")
+        c.metric("등록 일정", f"{len(events)}개")
+        st.markdown(month_heatmap_html(anchor, events),unsafe_allow_html=True)
+        st.caption("'완료'로 표시한 학습시간만 색에 반영됩니다. 날짜 위에 마우스를 올려 일정을 확인하고, 일 보기에서 세부 내용을 볼 수 있어요.")
+    elif view == "주":
+        first = week_start(anchor)
+        end = first + timedelta(days=7)
+        events = events_in_range(first, end)
+        total = sum(completed_minutes([e for e in events if e['date']==(first+timedelta(days=i)).isoformat()]) for i in range(7))
+        st.markdown(f"**{first:%Y-%m-%d} ~ {(end-timedelta(days=1)):%Y-%m-%d}** · 완료 {fmt_hours(total)}")
+        st.markdown(heatmap_html(first, events, days=7),unsafe_allow_html=True)
+        st.caption("각 칸은 해당 시간대에 실제 완료한 학습 분량입니다. 흐린 칸도 마우스를 올리면 계획된 일정을 확인할 수 있어요.")
     else:
-        st.info("이 주에 등록된 일정이 없습니다. 아래에서 날짜·학습시간·내용을 추가하세요.")
-    if not editable: return
-    with st.expander("➕ 날짜·시간별 학습 일정 추가", expanded=not bool(events)):
+        first = anchor
+        events = events_in_range(first, first+timedelta(days=1))
+        total = completed_minutes(events)
+        st.markdown(f"**{anchor:%Y-%m-%d} ({WEEKDAYS[anchor.weekday()]})** · 완료 {fmt_hours(total)}")
+        st.markdown(heatmap_html(anchor, events, days=1), unsafe_allow_html=True)
+    if events:
+        with st.expander(f"📋 선택한 {view}의 일정 {len(events)}건", expanded=(view=="일")):
+            st.dataframe([{"날짜":e["date"],"시간":f'{e["start"]}~{e["end"]}',
+                          "학습 내용":e["title"],"유형":e["category"],"상태":e["status"]} for e in events],
+                         hide_index=True, use_container_width=True)
+    else:
+        st.caption("이 기간에는 등록한 학습 일정이 없습니다.")
+    if not editable:
+        return
+    with st.expander("＋ 학습 일정 등록", expanded=False):
         with st.form(f"{prefix}_add", clear_on_submit=True):
             col1, col2, col3 = st.columns(3)
-            with col1: chosen_date = st.date_input("학습 날짜", value=anchor, key=f"{prefix}_add_date")
+            with col1: chosen_date = st.date_input("학습 날짜", value=anchor, key=f"{prefix}_add_date", required=True)
             with col2: start = st.time_input("시작", value=time(19, 0), step=900, key=f"{prefix}_add_start")
             with col3: end = st.time_input("종료", value=time(20, 0), step=900, key=f"{prefix}_add_end")
             title = st.text_input("학습 내용", placeholder="예: RAG 청킹 원리 복습", max_chars=150, key=f"{prefix}_add_title")
@@ -433,23 +622,24 @@ def render_schedule(prefix, editable=True):
             added = st.form_submit_button("일정 저장", type="primary", use_container_width=True)
         if added:
             if not title.strip(): st.warning("학습 내용을 적어 주세요.")
-            elif end <= start: st.warning("종료 시간은 시작 시간보다 뒤여야 합니다. (자정 넘는 일정은 날짜별로 나눠 등록)")
-            elif len(S.study_events) >= 1000: st.warning("한 세션에는 최대 1,000개 일정까지 등록할 수 있어요.")
+            elif not chosen_date: st.warning("학습 날짜를 선택해 주세요.")
+            elif end <= start: st.warning("종료 시간은 시작 시간보다 뒤여야 합니다. 자정 넘는 일정은 날짜별로 나눠 등록하세요.")
+            elif len(S.study_events) >= 1000: st.warning("한 세션에 최대 1,000개의 일정을 등록할 수 있습니다.")
             else:
-                S.study_events.append({"id":uuid.uuid4().hex[:12], "date":chosen_date.isoformat(),
-                                       "start":start.strftime("%H:%M"), "end":end.strftime("%H:%M"),
-                                       "title":title.strip(), "category":what, "status":done})
+                S.study_events.append({"id":uuid.uuid4().hex[:12],"date":chosen_date.isoformat(),
+                                       "start":start.strftime("%H:%M"),"end":end.strftime("%H:%M"),
+                                       "title":title.strip(),"category":what,"status":done})
                 S.calendar_anchor = chosen_date
                 st.rerun()
     if events:
-        with st.expander("✏️ 기존 일정 수정 / 삭제"):
+        with st.expander("✎ 기존 일정 수정 · 삭제"):
             ids = {f"{e['date']} {e['start']}~{e['end']} · {e['title']} ({e['id'][:4]})":e["id"] for e in events}
             selected_name = st.selectbox("수정할 일정", list(ids), key=f"{prefix}_event_choice")
             selected = next(e for e in S.study_events if e["id"] == ids[selected_name])
             event_key = selected["id"]
             with st.form(f"{prefix}_edit_{event_key}"):
                 col1,col2,col3 = st.columns(3)
-                with col1: edit_date = st.date_input("날짜", value=date.fromisoformat(selected["date"]), key=f"{prefix}_date_{event_key}")
+                with col1: edit_date = st.date_input("날짜", value=date.fromisoformat(selected["date"]), key=f"{prefix}_date_{event_key}", required=True)
                 with col2: edit_start = st.time_input("시작", value=time.fromisoformat(selected["start"]), key=f"{prefix}_start_{event_key}")
                 with col3: edit_end = st.time_input("종료", value=time.fromisoformat(selected["end"]), key=f"{prefix}_end_{event_key}")
                 edit_title = st.text_input("내용", value=selected["title"], key=f"{prefix}_title_{event_key}")
@@ -464,20 +654,22 @@ def render_schedule(prefix, editable=True):
                 st.rerun()
             if do_save:
                 if not edit_title.strip(): st.warning("내용을 적어 주세요.")
+                elif not edit_date: st.warning("날짜를 선택해 주세요.")
                 elif edit_end <= edit_start: st.warning("종료 시간은 시작 시간보다 뒤여야 합니다.")
                 else:
                     selected.update({"date":edit_date.isoformat(), "start":edit_start.strftime("%H:%M"),
-                                    "end":edit_end.strftime("%H:%M"), "title":edit_title.strip(),
-                                    "category":edit_category, "status":edit_status})
+                                     "end":edit_end.strftime("%H:%M"), "title":edit_title.strip(),
+                                     "category":edit_category, "status":edit_status})
                     S.calendar_anchor = edit_date
                     st.rerun()
+
 
 
 def safe_backup():
     """개인 정보 유출을 피하기 위해 PDF·대화·API 키는 백업에 포함하지 않습니다."""
     keys = ["level", "weekly_hours", "goal", "days", "study_events", "study_logs",
             "menu_order", "answer_format", "answer_tone", "tts_model", "tts_voice",
-            "tts_speed", "stt_model", "theme_mode", "chat_height"]
+            "tts_speed", "stt_model", "theme_mode", "chat_height", "calendar_view"]
     data = {k:S[k] for k in keys}
     data["study_checks"] = {str(i):bool(S.get(f"execute_{i}", False)) for i in range(5)}
     return json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
@@ -494,6 +686,7 @@ def restore_backup(data):
         "answer_tone": ("차분한", "다정한", "엄격한", "자신감을 주는", "격려하는 코치"),
         "tts_model": TTS_MODELS, "tts_voice": ALL_VOICES,
         "stt_model": STT_MODELS, "theme_mode": ("시스템", "라이트", "다크"),
+        "calendar_view": ("월", "주", "일"),
     }
     for field, allowed in options.items():
         if obj.get(field) in allowed: S[field]=obj[field]
@@ -642,14 +835,15 @@ def export_conversation():
 
 
 def render_recommendations(prefix,compact=False):
-    st.markdown("**✨ 추천 질문**")
-    with st.container(key=f"recs_{prefix}"):
-        cols=st.columns(2)
-        for i,q in enumerate(QUESTIONS[:4] if compact else QUESTIONS):
-            with cols[i%2]:
-                if st.button(q,key=f"rec_{prefix}_{i}",use_container_width=True):
-                    submit_question(q)
-                    rerun_after_question(prefix)
+    # 추천 질문은 열기/닫기가 가능한 접이식 영역입니다.
+    with st.expander("✨ 추천 질문", expanded=True):
+        with st.container(key=f"recs_{prefix}"):
+            cols=st.columns(2)
+            for i,q in enumerate(QUESTIONS[:4] if compact else QUESTIONS):
+                with cols[i%2]:
+                    if st.button(q,key=f"rec_{prefix}_{i}",use_container_width=True):
+                        submit_question(q)
+                        rerun_after_question(prefix)
 
 
 def render_chat_input(prefix):
@@ -677,24 +871,15 @@ def render_top_five():
         if count is not None: st.caption(f"{count}회 질문")
 
 
-def render_chat_size(prefix):
-    left,right=st.columns([3,2],vertical_alignment="center")
-    with left: st.caption(f"대화 영역 높이: {S.chat_height}px")
-    with right:
-        less,more=st.columns(2)
-        with less:
-            if st.button("－ 줄이기",key=f"shrink_{prefix}",use_container_width=True):
-                S.chat_height=max(240,int(S.chat_height)-120); rerun_after_question(prefix)
-        with more:
-            if st.button("＋ 늘리기",key=f"grow_{prefix}",use_container_width=True):
-                S.chat_height=min(960,int(S.chat_height)+120); rerun_after_question(prefix)
+def render_popular_questions():
+    with st.expander("☰ 많이 묻는 질문 TOP 5", expanded=False):
+        render_top_five()
 
 
 @st.dialog("💬 AIVLE Guide AI 도우미",width="large")
 def chatbot_dialog():
     st.caption("백서 근거 중심 AI 도우미 · 문서 업로드는 왼쪽 사이드바에서 진행")
     render_recommendations("popup",compact=True)
-    render_chat_size("popup")
     with st.container(height=int(S.chat_height),border=True):
         render_message_history("popup")
     render_chat_input("popup")
@@ -724,9 +909,7 @@ with st.sidebar:
     # [UI-P02] 유일한 PDF 업로더 위치. 드래그앤드롭 기본 지원.
     document_upload()
     st.divider()
-    # [UI-P03] 인기 질문은 ☰ 메뉴 버튼을 누를 때만 펼쳐지는 사이드바 팝오버로 이동.
-    with st.popover("☰ 많이 묻는 질문 TOP 5",use_container_width=True):
-        render_top_five()
+    # 인기 질문은 AI 채팅 페이지에서 확인할 수 있습니다.
     st.markdown("[KT AIVLE School 공식 홈페이지](https://aivle.kt.co.kr/)")
 
 if S.page == "홈":
@@ -742,32 +925,21 @@ if S.page == "홈":
         if st.button("📚 나만의 학습전략",use_container_width=True): navigate("학습전략")
     with c3:
         if st.button("💬 AI 도우미 시작",type="primary",use_container_width=True): navigate("AI에게 질문하기")
-    st.write("")
-    st.subheader("🗓️ 나의 학습 계획 시간표")
-    # [UI-P04] 학습전략에서 작성한 목표/스케줄/실행점검을 홈에서 실시간 반영합니다.
-    completed_checks=sum(bool(S.get(f"execute_{i}",False)) for i in range(5))
-    a,b,c=st.columns(3)
-    a.metric("학습 수준",S.level)
-    b.metric("주간 학습 목표",f"{S.weekly_hours}시간")
-    c.metric("실행점검 완료",f"{completed_checks}/5")
-    st.markdown(f"**이번 주 목표:** {html.escape(S.goal)}")
-    last=S.study_logs[-1] if S.study_logs else None
-    if last:
-        st.caption(f"마지막 실행 기록 · {last.get('날짜','날짜 미상')} · 실제 {last.get('실제시간',0)}시간 / 목표 {last.get('계획시간',S.weekly_hours)}시간 · 실습 {last.get('실습완료',0)}개")
-    else:
-        st.caption("학습전략 → 실행점검의 기록도 이곳에 표시됩니다. 주간 학습량은 시간표에 등록된 일정으로 계산합니다.")
-    render_schedule("home",editable=True)
-    st.caption("일정과 학습 기록은 현재 세션에 저장됩니다. 환경설정의 JSON 백업/복원으로 다음 접속에도 이어갈 수 있어요.")
     st.divider()
-    st.subheader("에이블스쿨의 주요 학습 경험")
-    a,b,c=st.columns(3)
-    for col,head,desc in [
-        (a,"🌐 온라인 중심 실습","강의·실습 플랫폼에서 기초 개념을 익히고 적용합니다."),
-        (b,"🧑‍🏫 현직 전문가 피드백","기업 실무 관점의 코칭과 발표 피드백을 반영합니다."),
-        (c,"🛠️ 팀 기반 프로젝트","문제 정의에서 분석·구현·제안까지 협업합니다."),
-    ]:
-        with col:
-            st.markdown(f'<div class="panel"><strong>{head}</strong><p>{desc}</p></div>',unsafe_allow_html=True)
+    st.subheader("나의 학습 계획")
+    # 학습전략의 목표·실행점검·시간표 데이터와 실시간 동기화합니다.
+    completed_checks=sum(bool(S.get(f"execute_{i}",False)) for i in range(5))
+    a,b,c = st.columns(3)
+    a.metric("이번 주 목표", f"{S.weekly_hours}시간")
+    b.metric("학습 수준", S.level)
+    c.metric("실행 점검", f"{completed_checks}/5")
+    st.caption(f"학습 목표: {S.goal}")
+    if S.study_logs:
+        last=S.study_logs[-1]
+        st.caption(f"최근 실행 기록 · {last.get('날짜','')} · {last.get('실제시간',0)}시간 학습 · 실습 {last.get('실습완료',0)}개")
+    render_schedule("home",editable=True)
+    st.caption("시간표와 기록은 현재 세션에 저장됩니다. 장기 보관은 환경설정의 JSON 백업을 이용하세요.")
+
 
 elif S.page == "에이블스쿨이란?":
     st.title("🎓 에이블스쿨이란?")
@@ -780,8 +952,17 @@ elif S.page == "에이블스쿨이란?":
               "DX 컨설턴트":["기업 DX 과제 설계·제안","고객 문제 분석, 서비스 설계, 솔루션 제안","분석 근거, 제안서, 프로토타입"]})
     st.subheader("교육의 큰 흐름")
     st.markdown("**기초 역량 학습 → 미니프로젝트 → 빅프로젝트 → 진로·취업 준비**")
+    st.subheader("에이블스쿨의 주요 학습 경험")
+    a,b,c=st.columns(3)
+    for col,head,desc in [
+        (a,"🌐 온라인 중심 실습","강의·실습 플랫폼에서 기초 개념을 익히고 적용합니다."),
+        (b,"🧑‍🏫 현직 전문가 피드백","기업 실무 관점의 코칭과 발표 피드백을 반영합니다."),
+        (c,"🛠️ 팀 기반 프로젝트","문제 정의에서 분석·구현·제안까지 협업합니다."),
+    ]:
+        with col:
+            st.markdown(f'<div class="panel"><strong>{head}</strong><p>{desc}</p></div>',unsafe_allow_html=True)
     st.subheader("학습 환경·지원")
-    st.markdown("- 온라인 중심 학습·실습\n- 현직 전문가 코칭 및 프로젝트 피드백\n- 취업 관련 컨설팅·잡페어 등 안내\n- 세부 혜택·채용 우대는 모집 기수와 공고에 따라 달라질 수 있음")
+    st.markdown("- 비대면 중심 수업 및 실습\n- 취업 컨설팅·잡페어 등 진로 지원\n- 세부 혜택과 채용 우대는 모집 기수별 공고 확인")
     st.link_button("공식 프로그램 안내", "https://aivle.kt.co.kr/home/main/programMain?mcd=HM02001000")
 
 elif S.page == "공지사항":
@@ -975,6 +1156,11 @@ elif S.page == "환경설정":
         st.caption("음성 답변은 '🔊 답변 듣기'를 클릭할 때만 생성됩니다. 설정 변경 후 새로 듣기를 누르면 변경한 속도·목소리로 생성합니다.")
         st.caption("현재 음성 합성 API 모델은 향후 변경될 수 있으므로 장기 배포 시 공식 API 문서를 확인하세요.")
         st.divider()
+        st.subheader("채팅 화면")
+        S.chat_height=st.slider("대화 영역 높이 (px)", min_value=300, max_value=900,
+                                value=int(min(900,max(300,S.chat_height))),step=50)
+        st.caption("AI에게 질문하기 페이지와 플로팅 AI 채팅창에 공통 적용됩니다.")
+        st.divider()
         st.subheader("화면 모드")
         theme=["시스템","라이트","다크"]
         chosen=st.radio("테마",theme,index=theme.index(S.theme_mode) if S.theme_mode in theme else 0,horizontal=True)
@@ -1021,11 +1207,10 @@ elif S.page == "AI에게 질문하기":
     name,_=active_document()
     st.caption("백서 근거 기반 RAG 질의응답 · PDF 변경/업로드는 왼쪽 사이드바에서만 가능합니다.")
     st.info(f"현재 백서: {name}" if name else "📄 왼쪽 사이드바에서 백서 PDF를 드래그해 업로드해 주세요.")
-    # [UI-P05] 추천 질문을 채팅보다 위에 배치했습니다.
+    # 추천 질문과 많이 묻는 질문을 모두 이 페이지에서 펼쳐 볼 수 있습니다.
     render_recommendations("full",compact=False)
+    render_popular_questions()
     st.divider()
-    # [UI-P06] 채팅 높이 +/- 조절; 사이드바 TOP5 외 오른쪽 FAQ 패널 제거.
-    render_chat_size("full")
     with st.container(height=int(S.chat_height),border=True):
         render_message_history("full")
     render_chat_input("full")
@@ -1043,5 +1228,5 @@ elif S.page == "AI에게 질문하기":
 # 일반 페이지에서만 큰 플로팅 버튼 활성화
 if S.page!="AI에게 질문하기":
     with st.container(key="chat_float"):
-        if st.button("💬",key="float_chat_button",help="AI 도우미 열기"):
+        if st.button("AI",key="float_chat_button",help="AI 도우미 열기"):
             chatbot_dialog()
