@@ -448,6 +448,8 @@ class AivleRag:
                 "id": f"D{i}", "name": self.document_name,
                 "page": int(page) + 1 if page is not None else None,
                 "section": source_type_info(doc),
+                "source_types": [t for t in doc.metadata.get("source_types", "").split(", ") if t],
+                "source_document_kind": doc.metadata.get("source_document_kind", "body"),
                 "ids": sorted(set(SOURCE_PATTERN.findall(doc.page_content))),
                 "excerpt": " ".join(doc.page_content.strip().split())[:430],
             })
