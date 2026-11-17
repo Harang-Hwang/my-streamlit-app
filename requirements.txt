@@ -3,4 +3,6 @@ langchain-openai>=1.0,<2
 langchain-chroma>=1.0,<2
 langchain-community>=0.4,<1
 langchain-text-splitters>=1.0,<2
+langchain-pymupdf4llm==1.28.0
 pymupdf>=1.25,<2
+chromadb>=1.0,<2
